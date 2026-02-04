@@ -120,14 +120,13 @@ nano .env  # или vim .env
 Эти файлы специально не хранятся в репозитории. Без них панель не запустится.
 
 Файлы и куда положить:
-1. `frontend/src/main.jsx`
-2. `frontend/src/App.jsx`
-3. `frontend/src/components/AdminPanel.jsx`
-4. `backend/keys/jwt_private.pem`
-5. `backend/keys/jwt_public.pem`
-6. `.env`
-7. `certs/fullchain.pem` (если используете свои SSL-сертификаты)
-8. `certs/privkey.pem` (если используете свои SSL-сертификаты)
+1. `frontend/src/main.tsx`
+2. `frontend/src/App.tsx`
+3. `backend/keys/jwt_private.pem`
+4. `backend/keys/jwt_public.pem`
+5. `.env`
+6. `certs/fullchain.pem` (если используете свои SSL-сертификаты)
+7. `certs/privkey.pem` (если используете свои SSL-сертификаты)
 
 #### 📝 Обязательные переменные
 
