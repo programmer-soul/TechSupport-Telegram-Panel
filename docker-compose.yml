@@ -1,0 +1,73 @@
+services:
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-support}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-support}
+    volumes:
+      - uploads:/data/uploads
+      - ./backend/keys:/app/keys:ro
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    command: ["/bin/sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+
+  bot:
+    build: ./bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      BACKEND_BASE_URL: http://backend:8000
+      BOT_INTERNAL_TOKEN: ${BOT_INTERNAL_TOKEN:-change-me-bot}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    depends_on:
+      - backend
+    volumes:
+      - uploads:/data/uploads
+    ports:
+      - "8081:8081"
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    depends_on:
+      - backend
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  uploads:
+  caddy_data:
+  caddy_config:

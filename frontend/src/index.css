@@ -1,0 +1,179 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  overflow-x: hidden;
+  overscroll-behavior: none;
+  position: fixed;
+  width: 100%;
+  max-width: 100vw;
+  top: 0;
+  left: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  padding-left: env(safe-area-inset-left, 0);
+  padding-right: env(safe-area-inset-right, 0);
+}
+
+/* Prevent horizontal scroll everywhere */
+* {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Prevent overflow on scrollable containers only */
+main, .overflow-x-hidden {
+  overflow-x: hidden;
+}
+
+/* Break long words to prevent horizontal overflow */
+p, span, h1, h2, h3, h4, h5, h6, a, label, td, th {
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+/* iOS touch improvements */
+button, a, [role="button"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  cursor: pointer;
+}
+
+/* Prevent iOS zoom on input focus - must be 16px minimum */
+@media screen and (-webkit-min-device-pixel-ratio: 0) {
+  input, textarea, select {
+    font-size: 16px !important;
+  }
+}
+
+/* Prevent zoom on double tap */
+* {
+  touch-action: manipulation;
+}
+
+/* Exclude from max-width rule: flex items, grid items, fixed positioned, absolute */
+.flex > *, .grid > *, [class*="absolute"], [class*="fixed"], svg, img, video, canvas, iframe {
+  max-width: none;
+}
+
+body {
+  font-family: 'DM Sans', ui-sans-serif, system-ui;
+  background: radial-gradient(1200px 600px at 10% -10%, rgba(67, 198, 245, 0.25), transparent 60%),
+    radial-gradient(1000px 500px at 110% -20%, rgba(233, 204, 122, 0.18), transparent 60%),
+    #0b0c10;
+}
+
+.glass {
+  background: rgba(18, 20, 27, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(18px);
+}
+
+.card {
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(24, 28, 39, 0.9), rgba(18, 21, 29, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.tg-widget {
+  min-height: 52px;
+}
+
+.tg-widget iframe {
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.tg-hidden {
+  min-height: 0;
+  height: 0;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.shimmer {
+  background: linear-gradient(90deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0.05) 100%);
+  background-size: 200% 100%;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 999px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+@keyframes msgIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.msg-appear {
+  animation: msgIn 0.18s ease-out;
+  will-change: transform, opacity;
+}
+
+.no-anchor {
+  overflow-anchor: none;
+}
+
+@keyframes loginIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.login-in {
+  animation: loginIn 0.35s ease-out both;
+}
+
+@keyframes fadeInQuick {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeInQuick 0.18s ease-out both;
+}

@@ -1,0 +1,26 @@
+{$DOMAIN:localhost} {
+    # Proxy API/WebSocket/Static to backend first
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /static/* {
+        reverse_proxy backend:8000
+    }
+    handle /ws {
+        reverse_proxy backend:8000 {
+            header_up Connection "Upgrade"
+            header_up Upgrade "websocket"
+        }
+    }
+    # Telegram webhook goes to bot service
+    handle /webhook/* {
+        reverse_proxy bot:8081
+    }
+
+    # SPA - serve static files with fallback to index.html
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+}

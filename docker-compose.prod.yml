@@ -1,0 +1,7 @@
+services:
+  frontend:
+    volumes:
+      - ./frontend/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required for production}

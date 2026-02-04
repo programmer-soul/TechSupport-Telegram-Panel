@@ -1,0 +1,27 @@
+.env
+.claude/
+
+# JWT keys
+backend/keys/jwt_private.pem
+backend/keys/jwt_public.pem
+
+# TLS certs (owner-provided)
+certs/fullchain.pem
+certs/privkey.pem
+
+# Required frontend entry files (owner-provided)
+frontend/src/main.jsx
+frontend/src/App.jsx
+frontend/src/components/AdminPanel.jsx
+frontend/src/main.tsx
+frontend/src/App.tsx
+frontend/src/components/AdminPanel.tsx
+
+# Build artifacts / deps
+frontend/node_modules/
+backend/__pycache__/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.log
+**/.DS_Store
