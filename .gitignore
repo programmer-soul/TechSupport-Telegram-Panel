@@ -12,10 +12,8 @@ certs/privkey.pem
 # Required frontend entry files (owner-provided)
 frontend/src/main.jsx
 frontend/src/App.jsx
-frontend/src/components/AdminPanel.jsx
 frontend/src/main.tsx
 frontend/src/App.tsx
-frontend/src/components/AdminPanel.tsx
 
 # Build artifacts / deps
 frontend/node_modules/
