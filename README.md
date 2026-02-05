@@ -71,7 +71,7 @@ POSTGRES_USER=postgres
 POSTGRES_DSN=postgresql+asyncpg://postgres:super-secure-password@db:5432/support
 
 TELEGRAM_TOKEN=123456:ABCDEF
-WEBHOOK_URL=https://support.example.com/webhook/telegram
+WEBHOOK_URL=https://support.example.com
 WEBHOOK_PATH=/webhook/telegram
 
 BOT_INTERNAL_TOKEN=internal-secret
