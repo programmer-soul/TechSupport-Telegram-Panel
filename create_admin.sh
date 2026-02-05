@@ -7,11 +7,11 @@ DO $$
 BEGIN
     IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'users') THEN
         -- Check if admin exists
-        IF NOT EXISTS (SELECT 1 FROM users WHERE username = 'admin') THEN
+        IF NOT EXISTS (SELECT 1 FROM users WHERE username = 'support') THEN
             INSERT INTO users (id, username, telegram_user_id, role, is_active, must_change_password, telegram_oauth_enabled, password_hash, created_at, updated_at)
             VALUES (
                 gen_random_uuid(),
-                'admin',
+                'support',
                 1,
                 'administrator',
                 true,
