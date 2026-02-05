@@ -40,6 +40,7 @@ if [ ! -f backend/keys/jwt_public.pem ]; then
   openssl rsa -in backend/keys/jwt_private.pem -pubout -out backend/keys/jwt_public.pem
   chmod 644 backend/keys/jwt_public.pem
 fi
+echo "[techweb] Ключи лежат в backend/keys (хост), в контейнере путь /app/keys"
 
 echo "[techweb] Проверка .env..."
 if [ ! -f .env ]; then

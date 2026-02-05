@@ -51,31 +51,53 @@ docker compose version
 ```
 
 ## Настройка `.env` (обязательно)
-После первого запуска `install.sh` откройте `.env` и заполните минимум:
+После первого запуска `install.sh` откройте `.env` и заполните **все поля** как в `.env.example`.
+
+Список полей:
+- `SECRET_KEY` — секретный ключ приложения
+- `CORS_ORIGINS` — разрешённые origin панели
+- `POSTGRES_USER` — пользователь БД
+- `POSTGRES_PASSWORD` — пароль БД
+- `POSTGRES_DB` — имя БД
+- `POSTGRES_DSN` — строка подключения к БД
+- `STORAGE_BACKEND` — тип хранилища (`local` или другое)
+- `STORAGE_LOCAL_PATH` — путь хранения файлов
+- `STORAGE_PUBLIC_BASE_URL` — публичный путь к файлам
+- `BOT_INTERNAL_TOKEN` — внутренний токен backend↔bot
+- `BOT_BASE_URL` — URL бота внутри Docker
+- `WEBHOOK_URL` — базовый URL панели без пути
+- `WEBHOOK_PATH` — путь вебхука
+- `PANEL_ORIGIN` — URL панели для cookies/auth
+- `COOKIE_SECURE` — `true` для HTTPS
+- `JWT_ISS` — issuer
+- `JWT_AUD` — audience
+- `JWT_PRIVATE_KEY` — путь к приватному ключу внутри контейнера
+- `JWT_PUBLIC_KEY` — путь к публичному ключу внутри контейнера
+- `RP_ID` — домен без `https://`
+- `RP_ORIGIN` — `https://<ваш-домен>`
 - `DOMAIN` — домен без `https://`
-- `SECRET_KEY` — любой длинный ключ
-- `TELEGRAM_TOKEN` — токен от @BotFather
-- `WEBHOOK_URL` — `https://<ваш-домен>/webhook/telegram`
-- `POSTGRES_PASSWORD` — пароль базы
-- `BOT_INTERNAL_TOKEN` — любой длинный ключ
-- `PANEL_ORIGIN` — `https://<ваш-домен>`
-- `RP_ID` и `RP_ORIGIN` — домен и `https://<ваш-домен>`
+
+Важно: ключи генерируются в `backend/keys` на хосте, а внутри контейнера доступны как `/app/keys`.
 
 Пример:
 ```bash
-DOMAIN=support.example.com
-SECRET_KEY=change-me-32-chars-or-more
+SECRET_KEY=change-me-secret
+CORS_ORIGINS=https://support.example.com
+
+POSTGRES_USER=postgres
 POSTGRES_PASSWORD=super-secure-password
 POSTGRES_DB=support
-POSTGRES_USER=postgres
 POSTGRES_DSN=postgresql+asyncpg://postgres:super-secure-password@db:5432/support
 
-TELEGRAM_TOKEN=123456:ABCDEF
-WEBHOOK_URL=https://support.example.com
-WEBHOOK_PATH=/webhook/telegram
+STORAGE_BACKEND=local
+STORAGE_LOCAL_PATH=/data/uploads
+STORAGE_PUBLIC_BASE_URL=/static
 
 BOT_INTERNAL_TOKEN=internal-secret
 BOT_BASE_URL=http://bot:8081
+
+WEBHOOK_URL=https://support.example.com
+WEBHOOK_PATH=/webhook/telegram
 
 PANEL_ORIGIN=https://support.example.com
 COOKIE_SECURE=true
@@ -86,6 +108,8 @@ JWT_ISS=support-panel
 JWT_AUD=support-panel
 JWT_PRIVATE_KEY=/app/keys/jwt_private.pem
 JWT_PUBLIC_KEY=/app/keys/jwt_public.pem
+
+DOMAIN=support.example.com
 ```
 
 ## Полезные команды
