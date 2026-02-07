@@ -16,6 +16,7 @@ from app.schemas.chats import ChatAssign, ChatEscalate, ChatOut, ChatNote
 from app.services.pagination import decode_cursor, encode_cursor
 from app.services.serializers import serialize_message
 from app.ws.manager import manager
+from app.services.panel_mode import ensure_test_chat, is_test_mode
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
@@ -30,6 +31,10 @@ async def list_chats(
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[ChatOut]:
+    if await is_test_mode(db):
+        test_chat = await ensure_test_chat(db)
+    else:
+        test_chat = None
     filters = []
     if tab == "new":
         filters.append(Chat.status == ChatStatus.new)
@@ -61,6 +66,9 @@ async def list_chats(
             message_match = exists(select(1).where((Chat.id == Message.chat_id) & (Message.text.ilike(like))))
             search_filters.append(message_match)
             filters.append(or_(*search_filters))
+
+    if test_chat:
+        filters.append(Chat.id == test_chat.id)
 
     preview_subq = (
         select(
@@ -96,6 +104,12 @@ async def list_chats(
 
 @router.get("/{chat_id}", response_model=ChatOut)
 async def get_chat(chat_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_admin)) -> ChatOut:
+    if await is_test_mode(db):
+        test_chat = await ensure_test_chat(db)
+        if str(test_chat.id) != str(chat_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        data = ChatOut.model_validate(test_chat).model_dump()
+        return data
     result = await db.execute(select(Chat).where(Chat.id == chat_id))
     chat = result.scalar_one_or_none()
     if not chat:
@@ -106,6 +120,10 @@ async def get_chat(chat_id: str, db: AsyncSession = Depends(get_db), admin: User
 
 @router.post("/{chat_id}/close", response_model=ChatOut)
 async def close_chat(chat_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_admin)) -> ChatOut:
+    if await is_test_mode(db):
+        test_chat = await ensure_test_chat(db)
+        if str(test_chat.id) != str(chat_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     result = await db.execute(select(Chat).where(Chat.id == chat_id))
     chat = result.scalar_one_or_none()
     if not chat:
@@ -136,6 +154,10 @@ async def close_chat(chat_id: str, db: AsyncSession = Depends(get_db), admin: Us
 
 @router.post("/{chat_id}/assign", response_model=ChatOut)
 async def assign_chat(chat_id: str, payload: ChatAssign, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_admin)) -> ChatOut:
+    if await is_test_mode(db):
+        test_chat = await ensure_test_chat(db)
+        if str(test_chat.id) != str(chat_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     result = await db.execute(select(Chat).where(Chat.id == chat_id))
     chat = result.scalar_one_or_none()
     if not chat:
@@ -171,6 +193,10 @@ async def update_chat_note(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ) -> Chat:
+    if await is_test_mode(db):
+        test_chat = await ensure_test_chat(db)
+        if str(test_chat.id) != str(chat_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     result = await db.execute(select(Chat).where(Chat.id == chat_id))
     chat = result.scalar_one_or_none()
     if not chat:
@@ -184,6 +210,10 @@ async def update_chat_note(
 
 @router.post("/{chat_id}/escalate", response_model=ChatOut)
 async def escalate_chat(chat_id: str, payload: ChatEscalate, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_admin)) -> ChatOut:
+    if await is_test_mode(db):
+        test_chat = await ensure_test_chat(db)
+        if str(test_chat.id) != str(chat_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     result = await db.execute(select(Chat).where(Chat.id == chat_id))
     chat = result.scalar_one_or_none()
     if not chat:
@@ -220,6 +250,11 @@ async def delete_chat(
     admin: User = Depends(get_current_admin),
 ):
     """Delete a chat completely. Only administrators can do this."""
+    if await is_test_mode(db):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Test mode chat cannot be deleted"
+        )
     if admin.role != UserRole.administrator:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

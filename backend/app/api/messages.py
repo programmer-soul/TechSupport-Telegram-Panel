@@ -17,6 +17,7 @@ from app.services.pagination import decode_cursor
 from app.services.bot_client import BotClient
 from app.services.serializers import serialize_message
 from app.ws.manager import manager
+from app.services.panel_mode import ensure_test_chat, is_test_mode
 
 router = APIRouter(prefix="/chats/{chat_id}/messages", tags=["messages"])
 
@@ -29,6 +30,11 @@ async def list_messages(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ) -> list[MessageOut]:
+    test_mode = await is_test_mode(db)
+    if test_mode:
+        test_chat = await ensure_test_chat(db)
+        if str(test_chat.id) != str(chat_id):
+            raise HTTPException(status_code=404, detail="Chat not found")
     chat_result = await db.execute(select(Chat).where(Chat.id == chat_id))
     chat = chat_result.scalar_one_or_none()
     if not chat:
@@ -59,6 +65,11 @@ async def create_message(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ) -> Message:
+    test_mode = await is_test_mode(db)
+    if test_mode:
+        test_chat = await ensure_test_chat(db)
+        if str(test_chat.id) != str(chat_id):
+            raise HTTPException(status_code=404, detail="Chat not found")
     chat_result = await db.execute(select(Chat).where(Chat.id == chat_id))
     chat = chat_result.scalar_one_or_none()
     if not chat:
@@ -136,17 +147,48 @@ async def create_message(
         chat_update_data["status"] = chat.status.value
     await manager.broadcast("chat_updated", chat_update_data)
 
-    bot_client = BotClient()
-    telegram_message_id = await bot_client.send_to_user(chat.tg_id, msg, attachments)
-    
-    # Update message with telegram_message_id if bot returned it
-    if telegram_message_id:
-        msg.telegram_message_id = telegram_message_id
+    if test_mode:
+        # Auto reply in test mode
+        test_reply = Message(
+            chat_id=chat.id,
+            direction=MessageDirection.inbound,
+            type=MessageType.text,
+            text="Тестовое сообщение",
+        )
+        db.add(test_reply)
+        await db.flush()
+        status_changed = False
+        if chat.status == ChatStatus.closed:
+            chat.status = ChatStatus.new
+            status_changed = True
+        chat.unread_count = (chat.unread_count or 0) + 1
+        chat.last_message_at = datetime.now(timezone.utc)
         await db.commit()
-        await db.refresh(msg)
-        # Broadcast updated message with telegram_message_id
-        serialized = serialize_message(msg, attachments)
-        await manager.broadcast("message_updated", {"chat_id": str(chat.id), "message": serialized})
+        await db.refresh(test_reply)
+        await manager.broadcast(
+            "message_created",
+            {"chat_id": str(chat.id), "message": serialize_message(test_reply, [])},
+        )
+        chat_update = {
+            "id": str(chat.id),
+            "unread_count": chat.unread_count,
+            "last_message_at": chat.last_message_at,
+        }
+        if status_changed:
+            chat_update["status"] = chat.status.value
+        await manager.broadcast("chat_updated", chat_update)
+    else:
+        bot_client = BotClient()
+        telegram_message_id = await bot_client.send_to_user(chat.tg_id, msg, attachments)
+        
+        # Update message with telegram_message_id if bot returned it
+        if telegram_message_id:
+            msg.telegram_message_id = telegram_message_id
+            await db.commit()
+            await db.refresh(msg)
+            # Broadcast updated message with telegram_message_id
+            serialized = serialize_message(msg, attachments)
+            await manager.broadcast("message_updated", {"chat_id": str(chat.id), "message": serialized})
 
     return MessageOut.model_validate(serialized)
 
@@ -158,6 +200,11 @@ async def delete_message(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ) -> None:
+    test_mode = await is_test_mode(db)
+    if test_mode:
+        test_chat = await ensure_test_chat(db)
+        if str(test_chat.id) != str(chat_id):
+            raise HTTPException(status_code=404, detail="Chat not found")
     try:
         msg_uuid = uuid.UUID(message_id)
         chat_uuid = uuid.UUID(chat_id)
@@ -185,7 +232,7 @@ async def delete_message(
     await db.delete(msg)
     await db.commit()
 
-    if tg_msg_id and direction == MessageDirection.outbound:
+    if tg_msg_id and direction == MessageDirection.outbound and not test_mode:
         bot_client = BotClient()
         await bot_client.delete_message(tg_id, tg_msg_id)
 

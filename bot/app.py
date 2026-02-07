@@ -421,14 +421,26 @@ async def handle_any(message: Message) -> None:
     }
     resp = await backend_request("POST", "/api/bot/incoming", payload)
     if resp and resp.get("send_autoreply"):
-        auto = await fetch_setting("bot_autoreply") or {"text": DEFAULT_AUTOREPLY, "delete_after": DEFAULT_AUTOREPLY_DELETE_AFTER}
-        reply = await message.answer(auto.get("text", DEFAULT_AUTOREPLY))
+        messages_settings = await fetch_setting("messages") or {}
+        autoreply_enabled = messages_settings.get("autoreply_enabled", True)
+        autoreply_text = messages_settings.get("autoreply")
+        delete_after = messages_settings.get("autoreply_delete_sec")
+
+        if not autoreply_enabled:
+            return
+
+        if not autoreply_text:
+            autoreply_text = DEFAULT_AUTOREPLY
+        if delete_after is None:
+            delete_after = DEFAULT_AUTOREPLY_DELETE_AFTER
+
+        reply = await message.answer(str(autoreply_text))
         await backend_request(
             "POST",
             "/api/bot/outgoing",
             {
                 "tg_id": message.from_user.id,
-                "text": auto.get("text", DEFAULT_AUTOREPLY),
+                "text": str(autoreply_text),
                 "type": "text",
                 "telegram_message_id": reply.message_id,
                 "attachments": [],
@@ -436,7 +448,13 @@ async def handle_any(message: Message) -> None:
         )
 
         async def delete_later() -> None:
-            await asyncio.sleep(int(auto.get("delete_after", DEFAULT_AUTOREPLY_DELETE_AFTER)))
+            try:
+                delay = int(delete_after) if str(delete_after).isdigit() else DEFAULT_AUTOREPLY_DELETE_AFTER
+            except Exception:
+                delay = DEFAULT_AUTOREPLY_DELETE_AFTER
+            if delay <= 0:
+                return
+            await asyncio.sleep(delay)
             try:
                 await bot.delete_message(chat_id=message.chat.id, message_id=reply.message_id)
             except Exception:

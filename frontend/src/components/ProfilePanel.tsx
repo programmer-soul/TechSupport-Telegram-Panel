@@ -662,6 +662,7 @@ export default function ProfilePanel({
   onBack,
   userRole,
   solobotUsername,
+  panelMode,
   onChatDeleted,
   onChatUpdated
 }: {
@@ -669,6 +670,7 @@ export default function ProfilePanel({
   onBack?: () => void
   userRole?: 'administrator' | 'moderator' | null
   solobotUsername?: string
+  panelMode?: 'prod' | 'test'
   onChatDeleted?: (chatId: string) => void
   onChatUpdated?: (patch: Partial<Chat>) => void
 }) {
@@ -1274,12 +1276,14 @@ export default function ProfilePanel({
 
       {chat && (
         <div className="mt-auto flex flex-col gap-2">
-          <button
-            onClick={handleOpenTelegram}
-            className="w-full rounded-full border border-white/10 py-2 text-sm text-white/70 hover:bg-white/10"
-          >
-            Открыть в боте
-          </button>
+          {panelMode !== 'test' && (
+            <button
+              onClick={handleOpenTelegram}
+              className="w-full rounded-full border border-white/10 py-2 text-sm text-white/70 hover:bg-white/10"
+            >
+              Открыть в боте
+            </button>
+          )}
           <button
             onClick={async () => {
               if (!chat) return
@@ -1302,7 +1306,7 @@ export default function ProfilePanel({
           >
             Закрыть чат
           </button>
-          {userRole === 'administrator' && (
+          {userRole === 'administrator' && panelMode !== 'test' && (
             <button
               onClick={() => setDeleteConfirm(true)}
               className="w-full rounded-full bg-rose-500/10 border border-rose-500/30 py-2 text-sm text-rose-300 hover:bg-rose-500/20 transition-colors"

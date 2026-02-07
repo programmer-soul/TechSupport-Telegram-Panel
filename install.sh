@@ -49,15 +49,15 @@ if [ ! -f .env ]; then
   exit 0
 fi
 
-echo "[techweb] Синхронизация пароля БД..."
-POSTGRES_PASSWORD="$(awk -F= '/^POSTGRES_PASSWORD=/{print $2}' .env | tail -n1)"
-POSTGRES_USER="$(awk -F= '/^POSTGRES_USER=/{print $2}' .env | tail -n1)"
-POSTGRES_DB="$(awk -F= '/^POSTGRES_DB=/{print $2}' .env | tail -n1)"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-postgres}"
+echo "[techweb] Проверка .env (загрузка переменных)..."
+set -a
+. ./.env
+set +a
+
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-support}"
 
-# Поднимаем только БД, чтобы можно было сменить пароль
+# Поднимаем только БД, чтобы она была готова к остальным сервисам
 docker compose up -d db
 
 # Ждем готовности БД
@@ -67,10 +67,6 @@ for i in {1..30}; do
   fi
   sleep 1
 done
-
-# Сброс пароля на значение из .env (чтобы backend смог подключиться)
-docker compose exec -T db psql -U "$POSTGRES_USER" -d postgres -c "ALTER USER $POSTGRES_USER WITH PASSWORD '$POSTGRES_PASSWORD';" >/dev/null 2>&1 || \
-  echo "[techweb] Внимание: не удалось автоматически синхронизировать пароль БД."
 
 echo "[techweb] Запуск контейнеров..."
 docker compose up -d --build

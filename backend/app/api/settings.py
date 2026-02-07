@@ -7,6 +7,8 @@ from app.db.session import get_db
 from app.models.enums import UserRole
 from app.models.setting import Setting
 from app.schemas.settings import SettingOut, SettingUpsert
+from app.services.panel_mode import PANEL_MODE_KEY, PANEL_MODE_PROD, delete_test_chat
+from app.ws.manager import manager
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -65,6 +67,9 @@ async def upsert_setting(
 ) -> Setting:
     result = await db.execute(select(Setting).where(Setting.key == payload.key))
     setting = result.scalar_one_or_none()
+    previous_mode = None
+    if setting and setting.key == PANEL_MODE_KEY and isinstance(setting.value_json, dict):
+        previous_mode = setting.value_json.get("mode")
     if setting:
         setting.value_json = payload.value_json
     else:
@@ -72,6 +77,12 @@ async def upsert_setting(
         db.add(setting)
     await db.commit()
     await db.refresh(setting)
+    if payload.key == PANEL_MODE_KEY:
+        new_mode = payload.value_json.get("mode") if isinstance(payload.value_json, dict) else None
+        if new_mode == PANEL_MODE_PROD:
+            deleted_id = await delete_test_chat(db)
+            if deleted_id:
+                await manager.broadcast("chat_deleted", {"id": deleted_id})
     return setting
 
 

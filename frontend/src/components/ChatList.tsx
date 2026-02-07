@@ -44,6 +44,7 @@ export default function ChatList({
   chats,
   selectedId,
   onSelect,
+  panelMode,
   hasMore = false,
   loadingMore = false,
   onLoadMore
@@ -51,6 +52,7 @@ export default function ChatList({
   chats: Chat[]
   selectedId?: string
   onSelect: (chat: Chat) => void
+  panelMode?: 'prod' | 'test'
   hasMore?: boolean
   loadingMore?: boolean
   onLoadMore?: () => void
@@ -81,23 +83,34 @@ export default function ChatList({
   return (
     <div className="flex flex-col gap-3">
       {chats.map((chat) => (
+        (() => {
+          const isTestChat = chat.tg_id === 999000111
+          const showTestBadge = panelMode === 'test' && isTestChat
+          return (
         <button
           key={chat.id}
           onClick={() => onSelect(chat)}
           className={clsx(
-            'relative card text-left p-4 hover:-translate-y-0.5 hover:shadow-glow transition-transform',
+            'relative text-left p-4 rounded-xl hover:-translate-y-0.5 transition-transform',
             selectedId === chat.id
               ? 'ring-1 ring-ocean-500/50 bg-ocean-600/10 shadow-glow'
-              : 'bg-white/[0.03]'
+              : 'bg-white/[0.03] hover:bg-white/[0.05]'
           )}
         >
           {selectedId === chat.id && (
             <span className="absolute left-0 top-3 bottom-3 w-[3px] rounded-full bg-ocean-500" />
           )}
           <div className="flex items-center justify-between">
-            <div className="text-sm font-display font-semibold">
-              {truncate(safeText(chat.first_name || 'Пользователь'), 22)}
-              <span className="text-white/50 ml-2">{truncate(`@${safeText(chat.tg_username || 'unknown')}`, 18)}</span>
+            <div className="text-sm font-display font-semibold flex items-center gap-2">
+              <span>
+                {truncate(safeText(chat.first_name || 'Пользователь'), 22)}
+                <span className="text-white/50 ml-2">{truncate(`@${safeText(chat.tg_username || 'unknown')}`, 18)}</span>
+              </span>
+              {showTestBadge && (
+                <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-amber-200">
+                  Тест
+                </span>
+              )}
             </div>
             {chat.unread_count > 0 && (
               <span className="text-xs bg-ocean-600 text-white px-2 py-0.5 rounded-full">
@@ -115,6 +128,8 @@ export default function ChatList({
             <span>{formatListTime(chat.last_message_at)}</span>
           </div>
         </button>
+          )
+        })()
       ))}
 
       {/* Loading more indicator */}

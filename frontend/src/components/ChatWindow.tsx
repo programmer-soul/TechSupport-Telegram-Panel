@@ -579,7 +579,7 @@ export default function ChatWindow({
             {onBack && (
               <button
                 onClick={onBack}
-                className="xl:hidden h-8 w-8 rounded-full border border-white/10 text-white/70 hover:bg-white/10 shrink-0"
+                className="xl:hidden h-8 w-8 rounded-full text-white/70 hover:bg-white/10 shrink-0"
                 aria-label="Назад"
               >
                 ←
@@ -594,7 +594,7 @@ export default function ChatWindow({
         {onShowProfile && chat && (
           <button
             onClick={onShowProfile}
-            className="xl:hidden ml-2 h-8 w-8 rounded-full border border-white/10 text-[11px] text-white/70 hover:bg-white/10 shrink-0"
+            className="xl:hidden ml-2 h-8 w-8 rounded-full text-[11px] text-white/70 hover:bg-white/10 shrink-0"
             aria-label="Информация"
           >
             ⓘ
@@ -777,7 +777,7 @@ export default function ChatWindow({
               className={clsx(
                 msg.type === 'system'
                   ? 'self-center rounded-full bg-white/5 border border-white/10 px-2 py-0.5 text-[9px] text-white/60 flex items-center gap-1'
-                  : 'group relative rounded-lg sm:rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 text-[11px] sm:text-xs leading-relaxed ' +
+                  : 'group relative rounded-lg sm:rounded-xl px-2.5 sm:px-3 pt-4 pb-1.5 sm:pt-3 sm:pb-2 text-[11px] sm:text-xs leading-relaxed ' +
                     (msg.direction === 'OUT'
                       ? 'self-end bg-ocean-600/20 border border-ocean-500/20'
                       : 'self-start bg-white/5 border border-white/10') +
@@ -859,7 +859,7 @@ export default function ChatWindow({
                   type="button"
                   onClick={() => setConfirmDelete(msg)}
                   disabled={deletingId === msg.id}
-                  className="absolute -top-3 right-2 flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/20 px-2 py-1 text-[10px] text-rose-200 shadow-soft hover:bg-rose-500/30 disabled:opacity-50"
+                  className="absolute top-1 right-2 flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/20 px-2 py-1 text-[10px] text-rose-200 shadow-soft hover:bg-rose-500/30 disabled:opacity-50"
                   title="Удалить сообщение"
                 >
                   {deletingId === msg.id ? '…' : (
@@ -874,13 +874,13 @@ export default function ChatWindow({
                   type="button"
                   onClick={() => setReplyTo(msg)}
                   className={clsx(
-                    'absolute -top-3 right-2 hidden group-hover:flex items-center gap-1 rounded-full border border-white/10 bg-ink-900/90 px-2 py-1 text-[10px] text-white/70 shadow-soft',
+                    'absolute top-1 right-2 hidden group-hover:flex items-center gap-1 rounded-full border border-white/10 bg-ink-900/90 px-2 py-1 text-[10px] text-white/70 shadow-soft',
                     !msg.telegram_message_id && 'opacity-50 cursor-not-allowed'
                   )}
                   disabled={!msg.telegram_message_id}
                   title="Ответить"
                 >
-                  ↩ Ответить
+                  ↩
                 </button>
               )}
               {msg.text ? (
@@ -1259,11 +1259,11 @@ export default function ChatWindow({
             }}
           />
           <div className="flex-1 relative" style={{ overflow: 'visible' }}>
-            <div className="relative rounded-2xl bg-ink-800/80 border border-white/10 px-4 pr-20 min-h-[56px] flex items-center">
+            <div className="relative rounded-2xl bg-ink-800/80 px-4 pr-20 min-h-[56px] flex items-center">
               <button
                 type="button"
                 onClick={() => setAttachOpen((v) => !v)}
-                className="absolute left-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full border border-white/10 text-white/60 hover:bg-white/10 active:bg-white/20 cursor-pointer touch-manipulation"
+                className="absolute left-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full text-white/60 hover:bg-white/10 active:bg-white/20 cursor-pointer touch-manipulation"
                 title="Прикрепить"
                 disabled={!chat}
               >
@@ -1282,7 +1282,7 @@ export default function ChatWindow({
                 <button
                   type="button"
                   onClick={() => setEmojiOpen((v) => !v)}
-                  className="h-9 w-9 rounded-full border border-white/10 text-white/60 hover:bg-white/10"
+                  className="h-9 w-9 rounded-full text-white/60 hover:bg-white/10"
                   title="Эмодзи"
                 >
                   🙂

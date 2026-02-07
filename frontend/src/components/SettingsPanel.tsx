@@ -178,15 +178,19 @@ function CollapsibleCard({ id, icon, title, subtitle, status, color, children, e
 
 interface SettingsPanelProps {
   onBrandingChange?: (name: string, description: string, pageTitle: string, faviconUrl: string) => void
+  onPanelModeChange?: (mode: 'prod' | 'test') => void
 }
 
-export default function SettingsPanel({ onBrandingChange }: SettingsPanelProps) {
+export default function SettingsPanel({ onBrandingChange, onPanelModeChange }: SettingsPanelProps) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [resetConfirm, setResetConfirm] = useState(false)
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['branding', 'bot']))
+
+  // Panel mode
+  const [panelMode, setPanelMode] = useState<'prod' | 'test'>('prod')
 
   // Branding
   const [appName, setAppName] = useState('')
@@ -239,6 +243,13 @@ export default function SettingsPanel({ onBrandingChange }: SettingsPanelProps) 
 
       const get = (key: string) => data.find(s => s.key === key)?.value_json as Record<string, unknown> | undefined
 
+      const mode = get('panel_mode')
+      if (mode && (mode.mode === 'test' || mode.mode === 'prod')) {
+        setPanelMode(mode.mode)
+      } else {
+        setPanelMode('prod')
+      }
+
       const brand = get('app_branding')
       if (brand) {
         setAppName(brand.name as string || '')
@@ -284,6 +295,7 @@ export default function SettingsPanel({ onBrandingChange }: SettingsPanelProps) 
     setSaving(true)
     try {
       await Promise.all([
+        api.upsertSetting({ key: 'panel_mode', value_json: { mode: panelMode } }),
         api.upsertSetting({ key: 'app_branding', value_json: { name: appName, description: appDesc, page_title: pageTitle, favicon_url: faviconUrl } }),
         api.upsertSetting({ key: 'support_bot', value_json: { username: botUsername, token: botToken } }),
         // Also save token in format expected by bot service
@@ -294,6 +306,7 @@ export default function SettingsPanel({ onBrandingChange }: SettingsPanelProps) 
         api.upsertSetting({ key: 'telegram_oauth', value_json: { enabled: tgOAuthEnabled, bot_username: tgOAuthBot, bot_token: tgOAuthToken } }),
       ])
       onBrandingChange?.(appName, appDesc, pageTitle, faviconUrl)
+      onPanelModeChange?.(panelMode)
       showToast('Сохранено', true)
     } catch { showToast('Ошибка', false) }
     finally { setSaving(false) }
@@ -326,6 +339,41 @@ export default function SettingsPanel({ onBrandingChange }: SettingsPanelProps) 
 
       {/* Cards Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Panel Mode */}
+        <div className="lg:col-span-2 rounded-2xl border border-white/[0.08] bg-gradient-to-br from-white/[0.03] via-transparent to-transparent p-5">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <div className="text-[14px] font-semibold text-white">Режим панели</div>
+              <div className="text-[12px] text-white/50 mt-1">
+                В тестовом режиме данные интеграций не требуются, доступен один демо-чат.
+              </div>
+            </div>
+            <div className="flex items-center gap-2 p-1 rounded-xl bg-white/[0.04] border border-white/[0.08]">
+              <button
+                type="button"
+                onClick={() => setPanelMode('prod')}
+                disabled={saving}
+                className={`px-3 h-9 rounded-lg text-[12px] font-medium transition-all ${panelMode === 'prod' ? 'bg-white text-black' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'}`}
+              >
+                Прод
+              </button>
+              <button
+                type="button"
+                onClick={() => setPanelMode('test')}
+                disabled={saving}
+                className={`px-3 h-9 rounded-lg text-[12px] font-medium transition-all ${panelMode === 'test' ? 'bg-amber-400 text-black' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'}`}
+              >
+                Тестовый
+              </button>
+            </div>
+          </div>
+          {panelMode === 'test' && (
+            <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-[12px] text-amber-200/80">
+              Тестовый режим: Solobot, Remnawave и бот поддержки отключены. Ответы в чате — «Тестовое сообщение».
+            </div>
+          )}
+        </div>
+
         {/* Branding */}
         <CollapsibleCard
           id="branding"
@@ -359,13 +407,13 @@ export default function SettingsPanel({ onBrandingChange }: SettingsPanelProps) 
           icon={Icon.bot}
           title="Бот поддержки"
           subtitle="Telegram бот для клиентов"
-          status={botUsername && botToken ? 'active' : 'warning'}
+          status={panelMode === 'test' ? 'off' : botUsername && botToken ? 'active' : 'warning'}
           color="from-sky-500/[0.08] to-transparent"
           expanded={expanded.has('bot')}
           onToggle={toggleCard}
         >
-          <Input label="Username" value={botUsername} onChange={setBotUsername} placeholder="@support_bot" disabled={saving} />
-          <Input label="Token" value={botToken} onChange={setBotToken} placeholder="123456789:ABC..." secret disabled={saving} hint="Получите у @BotFather" />
+          <Input label="Username" value={panelMode === 'test' ? '' : botUsername} onChange={setBotUsername} placeholder={panelMode === 'test' ? 'Не требуется в тестовом режиме' : '@support_bot'} disabled={saving || panelMode === 'test'} />
+          <Input label="Token" value={panelMode === 'test' ? '' : botToken} onChange={setBotToken} placeholder={panelMode === 'test' ? 'Не требуется в тестовом режиме' : '123456789:ABC...'} secret disabled={saving || panelMode === 'test'} hint={panelMode === 'test' ? 'Отключено в тестовом режиме' : 'Получите у @BotFather'} />
         </CollapsibleCard>
 
         {/* Remnawave */}
@@ -374,13 +422,13 @@ export default function SettingsPanel({ onBrandingChange }: SettingsPanelProps) 
           icon={Icon.sparkle}
           title="Remnawave"
           subtitle="Интеграция с панелью"
-          status={remnaUrl && remnaToken ? 'active' : 'warning'}
+          status={panelMode === 'test' ? 'off' : remnaUrl && remnaToken ? 'active' : 'warning'}
           color="from-cyan-500/[0.08] to-transparent"
           expanded={expanded.has('remnawave')}
           onToggle={toggleCard}
         >
-          <Input label="URL панели" value={remnaUrl} onChange={setRemnaUrl} placeholder="https://panel.example.com" disabled={saving} />
-          <Input label="API Token" value={remnaToken} onChange={setRemnaToken} placeholder="eyJhbGc..." secret disabled={saving} />
+          <Input label="URL панели" value={panelMode === 'test' ? '' : remnaUrl} onChange={setRemnaUrl} placeholder={panelMode === 'test' ? 'Не требуется в тестовом режиме' : 'https://panel.example.com'} disabled={saving || panelMode === 'test'} />
+          <Input label="API Token" value={panelMode === 'test' ? '' : remnaToken} onChange={setRemnaToken} placeholder={panelMode === 'test' ? 'Не требуется в тестовом режиме' : 'eyJhbGc...'} secret disabled={saving || panelMode === 'test'} />
         </CollapsibleCard>
 
         {/* Solobot */}
@@ -389,15 +437,15 @@ export default function SettingsPanel({ onBrandingChange }: SettingsPanelProps) 
           icon={Icon.bolt}
           title="Solobot"
           subtitle="Синхронизация с API"
-          status={soloUrl && soloKey && soloAdminId ? 'active' : 'warning'}
+          status={panelMode === 'test' ? 'off' : soloUrl && soloKey && soloAdminId ? 'active' : 'warning'}
           color="from-amber-500/[0.08] to-transparent"
           expanded={expanded.has('solobot')}
           onToggle={toggleCard}
         >
-          <Input label="Bot Username" value={soloUsername} onChange={setSoloUsername} placeholder="solobot" disabled={saving} hint="Username бота без @, для кнопки 'Открыть в боте'" />
-          <Input label="API URL" value={soloUrl} onChange={setSoloUrl} placeholder="https://api.solobot.com" disabled={saving} />
-          <Input label="API Key" value={soloKey} onChange={setSoloKey} placeholder="sk_live_..." secret disabled={saving} />
-          <Input label="Admin Telegram ID" value={soloAdminId} onChange={setSoloAdminId} placeholder="431503783" disabled={saving} hint="ID администратора для верификации токена" />
+          <Input label="Bot Username" value={panelMode === 'test' ? '' : soloUsername} onChange={setSoloUsername} placeholder={panelMode === 'test' ? 'Не требуется в тестовом режиме' : 'solobot'} disabled={saving || panelMode === 'test'} hint={panelMode === 'test' ? 'Отключено в тестовом режиме' : "Username бота без @, для кнопки 'Открыть в боте'"} />
+          <Input label="API URL" value={panelMode === 'test' ? '' : soloUrl} onChange={setSoloUrl} placeholder={panelMode === 'test' ? 'Не требуется в тестовом режиме' : 'https://api.solobot.com'} disabled={saving || panelMode === 'test'} />
+          <Input label="API Key" value={panelMode === 'test' ? '' : soloKey} onChange={setSoloKey} placeholder={panelMode === 'test' ? 'Не требуется в тестовом режиме' : 'sk_live_...'} secret disabled={saving || panelMode === 'test'} />
+          <Input label="Admin Telegram ID" value={panelMode === 'test' ? '' : soloAdminId} onChange={setSoloAdminId} placeholder={panelMode === 'test' ? 'Не требуется в тестовом режиме' : '431503783'} disabled={saving || panelMode === 'test'} hint={panelMode === 'test' ? 'Отключено в тестовом режиме' : 'ID администратора для верификации токена'} />
         </CollapsibleCard>
       </div>
 

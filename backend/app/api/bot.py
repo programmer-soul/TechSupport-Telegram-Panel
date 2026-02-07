@@ -70,6 +70,7 @@ async def incoming_message(payload: MessageFromBot, db: AsyncSession = Depends(g
     result = await db.execute(select(Chat).where(Chat.tg_id == payload.tg_id))
     chat = result.scalar_one_or_none()
     send_autoreply = False
+    reopened = False
     if not chat:
         chat = Chat(
             tg_id=payload.tg_id,
@@ -98,6 +99,7 @@ async def incoming_message(payload: MessageFromBot, db: AsyncSession = Depends(g
         # При повторном сообщении в закрытый чат - возвращаем в "Новые"
         if chat.status == ChatStatus.closed:
             chat.status = ChatStatus.new
+            reopened = True
             reopen_msg = Message(
                 chat_id=chat.id,
                 direction=MessageDirection.outbound,
@@ -118,6 +120,9 @@ async def incoming_message(payload: MessageFromBot, db: AsyncSession = Depends(g
         if not chat.autoreply_sent:
             chat.autoreply_sent = True
             send_autoreply = True
+    if reopened:
+        send_autoreply = False
+        chat.autoreply_sent = True
 
     msg = Message(
         chat_id=chat.id,

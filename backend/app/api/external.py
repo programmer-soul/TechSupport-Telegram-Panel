@@ -10,12 +10,69 @@ from app.external.remnawave import RemnawaveClient
 from app.external.solobot import SolobotClient
 from app.schemas.external import ExternalProfile
 from app.models.setting import Setting
+from app.services.panel_mode import is_test_mode, TEST_CHAT_FIRST_NAME, TEST_CHAT_LAST_NAME, TEST_CHAT_USERNAME
 
 router = APIRouter(prefix="/external", tags=["external"])
 
 
 @router.get("/solobot/profile/{tg_id}", response_model=ExternalProfile)
 async def solobot_profile(tg_id: int, admin=Depends(get_current_admin), db: AsyncSession = Depends(get_db)) -> ExternalProfile:
+    if await is_test_mode(db):
+        return ExternalProfile(
+            user={
+                "id": tg_id,
+                "username": TEST_CHAT_USERNAME,
+                "first_name": TEST_CHAT_FIRST_NAME,
+                "last_name": TEST_CHAT_LAST_NAME,
+                "created_at": "2024-01-01T00:00:00Z",
+                "status": "active",
+                "balance": 0,
+            },
+            keys=[
+                {
+                    "id": "TEST-KEY-001",
+                    "name": "Test Key",
+                    "status": "active",
+                    "created_at": "2024-01-10T12:00:00Z",
+                    "expire_at": "2026-01-01T00:00:00Z",
+                }
+            ],
+            payments=[
+                {
+                    "id": "TEST-PAY-001",
+                    "amount": 0,
+                    "currency": "RUB",
+                    "status": "paid",
+                    "created_at": "2024-01-15T09:00:00Z",
+                }
+            ],
+            ban_status={"status": "ok"},
+            tariffs=[
+                {
+                    "id": "TEST-TARIFF-001",
+                    "name": "Test Plan",
+                    "status": "active",
+                    "traffic": "безлимит",
+                }
+            ],
+            referrals=[
+                {
+                    "referred_tg_id": 111222333,
+                    "created_at": "2024-02-01T10:00:00Z",
+                    "reward_issued": False,
+                }
+            ],
+            remnawave=[{"id": "TEST-REM-001", "username": TEST_CHAT_USERNAME, "status": "active"}],
+            remnawave_devices=[
+                {
+                    "id": "TEST-DEVICE-001",
+                    "hwid": "TEST-HWID",
+                    "subscription_uuid": "TEST-REM-001",
+                    "subscription_username": TEST_CHAT_USERNAME,
+                    "subscription_status": "active",
+                }
+            ],
+        )
     solobot_cfg = None
     remnawave_cfg = None
     result = await db.execute(select(Setting).where(Setting.key.in_(["solobot_integration", "remnawave_integration"])))
@@ -139,6 +196,8 @@ async def solobot_profile(tg_id: int, admin=Depends(get_current_admin), db: Asyn
 
 @router.post("/remnawave/devices/delete")
 async def delete_hwid_device(payload: dict, admin=Depends(get_current_admin), db: AsyncSession = Depends(get_db)) -> dict:
+    if await is_test_mode(db):
+        return {"ok": True, "result": {"status": "test_mode"}}
     remnawave_cfg = None
     result = await db.execute(select(Setting).where(Setting.key == "remnawave_integration"))
     setting = result.scalar_one_or_none()
