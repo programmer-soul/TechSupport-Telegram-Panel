@@ -25,6 +25,10 @@ class RemnawaveClient:
         path = "/api/hwid/devices/{userUuid}"
         return await self._safe_request("get", path, params={"userUuid": user_uuid})
 
+    async def get_user(self, user_uuid: str) -> dict | None:
+        path = "/api/users/{uuid}"
+        return await self._safe_request("get", path, params={"uuid": user_uuid})
+
     async def delete_hwid_device(self, user_uuid: str, hwid: str) -> dict | None:
         path = "/api/hwid/devices/delete"
         return await self._safe_request("post", path, params={}, json_body={"userUuid": user_uuid, "hwid": hwid})

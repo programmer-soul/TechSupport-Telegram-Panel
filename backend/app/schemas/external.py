@@ -10,3 +10,4 @@ class ExternalProfile(BaseModel):
     referrals: list | None = None
     remnawave: list | dict | None = None
     remnawave_devices: list | None = None
+    summary: dict | None = None

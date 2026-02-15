@@ -133,7 +133,7 @@ export default function ChatWindow({
   const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const safeText = (value?: unknown) => {
     if (value === null || value === undefined) return ''
-    if (typeof value === 'string') return value.replace(/<[^>]*>/g, '')
+    if (typeof value === 'string') return value
     return String(value)
   }
   const formatMsgTime = (iso?: string) => {
@@ -183,6 +183,7 @@ export default function ChatWindow({
   const fileRef = useRef<HTMLInputElement>(null)
   const topLoaderRef = useRef<HTMLDivElement>(null)
   const prevScrollHeightRef = useRef<number>(0)
+  const noteBlockRef = useRef<HTMLDivElement>(null)
 
   // Load more messages when scrolling to top
   useEffect(() => {
@@ -323,6 +324,18 @@ export default function ChatWindow({
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [emojiOpen])
+
+  useEffect(() => {
+    if (!noteEditing) return
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!noteBlockRef.current) return
+      if (!noteBlockRef.current.contains(event.target as Node)) {
+        setNoteEditing(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [noteEditing])
 
   useEffect(() => {
     if (!chat) return
@@ -573,13 +586,13 @@ export default function ChatWindow({
           </div>
         </div>
       )}
-      <div className="flex items-center justify-between border-b border-white/10 pb-4">
+      <div className="flex items-center justify-between border-b border-white/10 pb-2 sm:pb-4">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-lg font-display font-semibold">
+          <div className="flex items-center gap-2 text-base sm:text-lg font-display font-semibold">
             {onBack && (
               <button
                 onClick={onBack}
-                className="xl:hidden h-8 w-8 rounded-full text-white/70 hover:bg-white/10 shrink-0"
+                className="xl:hidden h-7 w-7 rounded-full text-white/70 hover:bg-white/10 shrink-0"
                 aria-label="Назад"
               >
                 ←
@@ -591,21 +604,12 @@ export default function ChatWindow({
           </div>
           <div className="text-xs text-white/50">{chat ? `ID ${chat.tg_id}` : '—'}</div>
         </div>
-        {onShowProfile && chat && (
-          <button
-            onClick={onShowProfile}
-            className="xl:hidden ml-2 h-8 w-8 rounded-full text-[11px] text-white/70 hover:bg-white/10 shrink-0"
-            aria-label="Информация"
-          >
-            ⓘ
-          </button>
-        )}
         {chat && userRole === 'administrator' && (
           <button
             type="button"
             onClick={() => setDeleteMode((v) => !v)}
             className={clsx(
-              'sm:hidden ml-2 h-8 w-8 rounded-full border text-xs flex items-center justify-center shrink-0',
+              'sm:hidden order-1 ml-2 h-7 w-7 rounded-full border text-xs flex items-center justify-center shrink-0',
               deleteMode ? 'border-rose-500/50 bg-rose-500/20' : 'border-white/10 text-white/70 hover:bg-white/10'
             )}
             aria-label={deleteMode ? 'Выйти из режима удаления' : 'Режим удаления'}
@@ -635,6 +639,17 @@ export default function ChatWindow({
             </button>
           </div>
         )}
+        {onShowProfile && chat && (
+          <button
+            onClick={onShowProfile}
+            className="xl:hidden order-2 ml-2 h-7 w-7 rounded-full border border-white/10 text-white/70 hover:bg-white/10 shrink-0 flex items-center justify-center"
+            aria-label="Информация"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M12 16v-4m0-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <div
@@ -649,7 +664,7 @@ export default function ChatWindow({
         }}
       >
         {chat && (noteText.trim() || noteEditing) && (
-          <div className="sticky top-0 z-10 mb-3 rounded-2xl border border-white/10 bg-ink-900/80 backdrop-blur px-4 py-3 text-xs text-white/80 shadow-soft">
+          <div ref={noteBlockRef} className="sticky top-0 z-10 mb-3 rounded-2xl border border-white/10 bg-ink-900/80 backdrop-blur px-4 py-3 text-xs text-white/80 shadow-soft">
             <div className="flex items-center justify-between text-[10px] text-white/50 mb-1">
               <span>Комментарий</span>
               <span>
@@ -668,13 +683,15 @@ export default function ChatWindow({
               <div className="whitespace-pre-line">{noteText}</div>
             )}
             <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setNoteEditing((v) => !v)}
-                className="rounded-full border border-white/10 px-3 py-1 text-[10px] text-white/70 hover:bg-white/10"
-              >
-                {noteEditing ? 'Свернуть' : 'Редактировать'}
-              </button>
+              {!noteEditing && (
+                <button
+                  type="button"
+                  onClick={() => setNoteEditing(true)}
+                  className="rounded-full border border-white/10 px-3 py-1 text-[10px] text-white/70 hover:bg-white/10"
+                >
+                  Редактировать
+                </button>
+              )}
                 {noteEditing && (
                   <button
                     type="button"
@@ -696,15 +713,17 @@ export default function ChatWindow({
           </div>
         )}
         {deleteMode && chat && (
-          <div className="sticky top-0 z-10 mb-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 backdrop-blur px-4 py-3 flex items-center justify-between gap-3">
-            <span className="text-xs text-rose-200">Нажмите на сообщение для удаления</span>
-            <button
-              type="button"
-              onClick={() => setDeleteMode(false)}
-              className="shrink-0 rounded-full border border-white/10 px-3 py-1 text-[10px] text-white/70 hover:bg-white/10"
-            >
-              Выйти
-            </button>
+          <div className="sticky top-0 z-10 mb-3 flex justify-center">
+            <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 backdrop-blur px-4 py-2.5 flex items-center gap-3 max-w-full">
+              <span className="text-xs text-rose-200 whitespace-nowrap">Нажмите на сообщение для удаления</span>
+              <button
+                type="button"
+                onClick={() => setDeleteMode(false)}
+                className="shrink-0 rounded-full border border-white/10 px-3 py-1 text-[10px] text-white/70 hover:bg-white/10"
+              >
+                Выйти
+              </button>
+            </div>
           </div>
         )}
         {chat && !noteText.trim() && !noteEditing && !deleteMode && (
@@ -777,13 +796,7 @@ export default function ChatWindow({
               className={clsx(
                 msg.type === 'system'
                   ? 'self-center rounded-full bg-white/5 border border-white/10 px-2 py-0.5 text-[9px] text-white/60 flex items-center gap-1'
-                  : 'group relative rounded-lg sm:rounded-xl px-2.5 sm:px-3 pt-4 pb-1.5 sm:pt-3 sm:pb-2 text-[11px] sm:text-xs leading-relaxed ' +
-                    (msg.direction === 'OUT'
-                      ? 'self-end bg-ocean-600/20 border border-ocean-500/20'
-                      : 'self-start bg-white/5 border border-white/10') +
-                    (msg.attachments && msg.attachments.length > 0
-                      ? ' max-w-[75%] sm:max-w-[65%]'
-                      : ' max-w-[85%] sm:max-w-[75%]'),
+                  : 'group w-full flex ' + (msg.direction === 'OUT' ? 'justify-end' : 'justify-start'),
                 isNew && msg.type !== 'system' && 'msg-appear'
               )}
               onTouchStart={(e) => {
@@ -811,19 +824,21 @@ export default function ChatWindow({
                     Системное
                   </span>
                   <div className="flex-1">{msg.text}</div>
-                  {deleteMode && (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDelete(msg)}
-                      disabled={deletingId === msg.id}
-                      className="rounded-full border border-rose-500/40 bg-rose-500/20 px-2 py-0.5 text-[10px] text-rose-200 hover:bg-rose-500/30 disabled:opacity-50"
-                    >
-                      {deletingId === msg.id ? '…' : 'Удалить'}
-                    </button>
-                  )}
                 </div>
               ) : (
                 <>
+              <div className={clsx('flex items-start gap-2 max-w-full', msg.direction === 'OUT' && 'flex-row-reverse')}>
+              <div
+                className={clsx(
+                  'rounded-lg sm:rounded-xl px-2.5 sm:px-3 py-2 text-base sm:text-sm leading-relaxed',
+                  msg.direction === 'OUT'
+                    ? 'bg-ocean-600/20 border border-ocean-500/20'
+                    : 'bg-white/5 border border-white/10',
+                  msg.attachments && msg.attachments.length > 0
+                    ? 'max-w-[75%] sm:max-w-[65%]'
+                    : 'max-w-[85%] sm:max-w-[75%]'
+                )}
+              >
               <div className="mb-0.5 text-[9px] text-white/50">{senderLabel}</div>
               {/* Forwarded message indicator */}
               {msg.forward_from_name && (
@@ -854,37 +869,8 @@ export default function ChatWindow({
                   </div>
                 </div>
               )}
-              {deleteMode ? (
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(msg)}
-                  disabled={deletingId === msg.id}
-                  className="absolute top-1 right-2 flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/20 px-2 py-1 text-[10px] text-rose-200 shadow-soft hover:bg-rose-500/30 disabled:opacity-50"
-                  title="Удалить сообщение"
-                >
-                  {deletingId === msg.id ? '…' : (
-                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  )}
-                  Удалить
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setReplyTo(msg)}
-                  className={clsx(
-                    'absolute top-1 right-2 hidden group-hover:flex items-center gap-1 rounded-full border border-white/10 bg-ink-900/90 px-2 py-1 text-[10px] text-white/70 shadow-soft',
-                    !msg.telegram_message_id && 'opacity-50 cursor-not-allowed'
-                  )}
-                  disabled={!msg.telegram_message_id}
-                  title="Ответить"
-                >
-                  ↩
-                </button>
-              )}
               {msg.text ? (
-                <div>
+                <div className="whitespace-pre-wrap break-words">
                   {highlight && highlight.trim().length > 0
                     ? safeText(msg.text).split(new RegExp(`(${escapeRegExp(highlight)})`, 'ig')).map((part, idx) =>
                         part.toLowerCase() === highlight.toLowerCase() ? (
@@ -1216,6 +1202,39 @@ export default function ChatWindow({
               <div className="mt-1 text-right text-[9px] text-white/40">
                 {formatMsgTime(msg.created_at)}
               </div>
+              </div>
+              <div className={clsx('shrink-0 pt-1', !deleteMode && 'opacity-0 group-hover:opacity-100 transition-opacity')}>
+                {deleteMode ? (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(msg)}
+                    disabled={deletingId === msg.id}
+                    className="flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/20 px-2 py-1 text-[10px] text-rose-200 shadow-soft hover:bg-rose-500/30 disabled:opacity-50"
+                    title="Удалить сообщение"
+                  >
+                    {deletingId === msg.id ? '…' : (
+                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    )}
+                    Удалить
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setReplyTo(msg)}
+                    className={clsx(
+                      'flex items-center gap-1 rounded-full border border-white/10 bg-ink-900/90 px-2 py-1 text-[10px] text-white/70 shadow-soft',
+                      !msg.telegram_message_id && 'opacity-50 cursor-not-allowed'
+                    )}
+                    disabled={!msg.telegram_message_id}
+                    title="Ответить"
+                  >
+                    ↩
+                  </button>
+                )}
+              </div>
+              </div>
                 </>
               )}
             </div>
@@ -1274,9 +1293,17 @@ export default function ChatWindow({
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onPaste={handlePaste}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return
+                  if (e.ctrlKey) return
+                  e.preventDefault()
+                  if (!sending && (text.trim() || pendingAttachments.length > 0)) {
+                    void handleSend()
+                  }
+                }}
                 rows={2}
                 placeholder="Напишите ответ…"
-                className="w-full resize-none bg-transparent text-sm focus:outline-none pl-12 leading-5 py-1.5"
+                className="w-full resize-none bg-transparent text-base sm:text-sm focus:outline-none pl-12 leading-6 py-1.5"
               />
               <div className="absolute right-2 bottom-2 flex items-center gap-2">
                 <button
@@ -1593,7 +1620,7 @@ export default function ChatWindow({
           onClick={() => setConfirmDelete(null)}
         >
           <div
-            className="rounded-2xl border border-white/10 bg-ink-900 shadow-soft p-5 max-w-sm w-full"
+            className="rounded-2xl border border-white/10 bg-ink-900 shadow-soft p-5 w-auto max-w-[420px] min-w-[280px]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="text-sm font-medium mb-1">Удалить сообщение?</div>

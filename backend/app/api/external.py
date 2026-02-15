@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,6 +73,13 @@ async def solobot_profile(tg_id: int, admin=Depends(get_current_admin), db: Asyn
                     "subscription_status": "active",
                 }
             ],
+            summary={
+                "trial": 0,
+                "total_payments_amount": 0,
+                "total_payments_count": 1,
+                "referral_count": 1,
+                "source_invite": "test",
+            },
         )
     solobot_cfg = None
     remnawave_cfg = None
@@ -102,20 +110,19 @@ async def solobot_profile(tg_id: int, admin=Depends(get_current_admin), db: Asyn
         tls_verify=solobot_tls_verify,
     )
     
-    if not rem_base:
-        raise HTTPException(status_code=503, detail="Remnawave integration not configured")
-    
-    remnawave = RemnawaveClient(
-        base_url=rem_base,
-        token=rem_token,
-    )
+    remnawave = None
+    if rem_base:
+        remnawave = RemnawaveClient(
+            base_url=rem_base,
+            token=rem_token,
+        )
 
     user_task = solobot.get_user(tg_id)
     keys_task = solobot.get_all_keys(tg_id)
     payments_task = solobot.get_payments(tg_id)
     tariffs_task = solobot.get_tariffs(tg_id)
     referrals_task = solobot.get_referrals(tg_id)
-    rem_task = remnawave.get_user_by_telegram(tg_id)
+    rem_task = remnawave.get_user_by_telegram(tg_id) if remnawave else asyncio.sleep(0, result=None)
 
     user, keys, payments, tariffs, referrals, rem = await asyncio.gather(
         user_task, keys_task, payments_task, tariffs_task, referrals_task, rem_task
@@ -153,6 +160,8 @@ async def solobot_profile(tg_id: int, admin=Depends(get_current_admin), db: Asyn
         rem_users = [rem]
 
     async def _fetch_devices(user_item: dict) -> list[dict]:
+        if not remnawave:
+            return []
         user_uuid = user_item.get("uuid") or user_item.get("id")
         if not user_uuid:
             return []
@@ -182,15 +191,137 @@ async def solobot_profile(tg_id: int, admin=Depends(get_current_admin), db: Asyn
         all_devices = await asyncio.gather(*[_fetch_devices(u) for u in rem_users])
         devices = [d for group in all_devices for d in group]
 
+    def _to_int(value: Any) -> int | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            digits = value.strip()
+            if digits.startswith("-"):
+                body = digits[1:]
+                return -int(body) if body.isdigit() else None
+            return int(digits) if digits.isdigit() else None
+        return None
+
+    # Pull per-key Remnawave details when key has explicit client UUID
+    rem_user_map: dict[str, dict] = {}
+    if rem_users:
+        for rem_user in rem_users:
+            if not isinstance(rem_user, dict):
+                continue
+            for key_name in ("uuid", "id", "email", "username"):
+                key_value = rem_user.get(key_name)
+                if key_value:
+                    rem_user_map[str(key_value)] = rem_user
+
+    key_details_map: dict[str, dict] = {}
+    key_ids: list[str] = []
+    if remnawave and isinstance(keys, list):
+        for key_item in keys:
+            if not isinstance(key_item, dict):
+                continue
+            client_id = key_item.get("client_id")
+            if client_id:
+                key_ids.append(str(client_id))
+        key_ids = list(dict.fromkeys(key_ids))[:50]
+        if key_ids:
+            key_details = await asyncio.gather(*[remnawave.get_user(kid) for kid in key_ids], return_exceptions=True)
+            for kid, detail in zip(key_ids, key_details):
+                if isinstance(detail, Exception) or not isinstance(detail, dict):
+                    continue
+                response = detail.get("response")
+                if isinstance(response, dict):
+                    key_details_map[kid] = response
+
+    tariffs_by_id: dict[int, dict] = {}
+    if isinstance(tariffs, list):
+        for tariff in tariffs:
+            if not isinstance(tariff, dict):
+                continue
+            tariff_id = _to_int(tariff.get("id"))
+            if tariff_id is not None:
+                tariffs_by_id[tariff_id] = tariff
+
+    enriched_keys: list[dict] | None = None
+    if isinstance(keys, list):
+        enriched_keys = []
+        for key_item in keys:
+            if not isinstance(key_item, dict):
+                continue
+            item = dict(key_item)
+            key_client_id = item.get("client_id")
+            rem_detail = key_details_map.get(str(key_client_id)) if key_client_id else None
+            if not rem_detail:
+                for candidate in (
+                    item.get("email"),
+                    item.get("username"),
+                    item.get("client_id"),
+                    item.get("subscription_uuid"),
+                    item.get("uuid"),
+                ):
+                    if candidate and str(candidate) in rem_user_map:
+                        rem_detail = rem_user_map[str(candidate)]
+                        break
+
+            tariff_id = _to_int(item.get("tariff_id"))
+            tariff = tariffs_by_id.get(tariff_id) if tariff_id is not None else None
+            used_bytes = _to_int((rem_detail or {}).get("userTraffic", {}).get("usedTrafficBytes"))
+            limit_bytes = _to_int((rem_detail or {}).get("trafficLimitBytes"))
+            if used_bytes is not None:
+                item["used_traffic_bytes"] = used_bytes
+                item["used_traffic_gb"] = round(used_bytes / 1073741824, 2)
+            if limit_bytes is not None:
+                item["traffic_limit_bytes"] = limit_bytes
+                item["traffic_limit_gb"] = round(limit_bytes / 1073741824, 2) if limit_bytes > 0 else None
+            device_limit = (
+                item.get("current_device_limit")
+                if item.get("current_device_limit") is not None
+                else item.get("selected_device_limit")
+            )
+            if device_limit is None and tariff:
+                device_limit = tariff.get("device_limit")
+            if device_limit is None and rem_detail:
+                device_limit = rem_detail.get("hwidDeviceLimit")
+            item["resolved_device_limit"] = device_limit
+            if tariff:
+                item["tariff_name"] = tariff.get("name")
+                item["group_name"] = tariff.get("subgroup_title")
+            if rem_detail:
+                item["remnawave"] = rem_detail
+            enriched_keys.append(item)
+
+    successful_payments = []
+    if isinstance(payments, list):
+        successful_payments = [
+            p for p in payments
+            if isinstance(p, dict) and str(p.get("status", "")).lower() == "success"
+        ]
+    total_payments_amount = round(sum(float(p.get("amount", 0) or 0) for p in successful_payments), 2)
+    source_invite = (
+        user.get("source_code") if isinstance(user, dict) and user.get("source_code")
+        else None
+    )
+    if not source_invite and isinstance(user, dict):
+        source_invite = user.get("referrer_code") or user.get("inviter") or user.get("invited_by")
+
     return ExternalProfile(
         user=user,
-        keys=keys,
+        keys=enriched_keys if enriched_keys is not None else keys,
         payments=payments,
         ban_status=None,
         tariffs=tariffs,
         referrals=enriched_referrals,
         remnawave=rem_users,
         remnawave_devices=devices,
+        summary={
+            "trial": user.get("trial") if isinstance(user, dict) else None,
+            "total_payments_amount": total_payments_amount,
+            "total_payments_count": len(successful_payments),
+            "referral_count": len(enriched_referrals) if isinstance(enriched_referrals, list) else 0,
+            "source_invite": source_invite or "-",
+            "created_at": user.get("created_at") if isinstance(user, dict) else None,
+        },
     )
 
 

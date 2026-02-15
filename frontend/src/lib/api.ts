@@ -46,6 +46,7 @@ export type ExternalProfile = {
   referrals?: any[] | null
   remnawave?: any | null
   remnawave_devices?: any[] | null
+  summary?: Record<string, unknown> | null
 }
 
 export type InlineButton = { text: string; url: string }
@@ -134,6 +135,7 @@ const refreshAccessToken = async (): Promise<string | null> => {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = (options.method || 'GET').toUpperCase()
+  const isAuthLoginRequest = path === '/api/auth/login' || path === '/api/auth/telegram/oauth'
   const doFetch = async (tokenOverride?: string | null) => {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -147,6 +149,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   let res = await doFetch()
+  if (res.status === 401 && isAuthLoginRequest) {
+    const errorData = await res.clone().json().catch(() => null)
+    const detail = errorData?.detail
+    const message = typeof detail === 'object' && detail?.message
+      ? detail.message
+      : typeof detail === 'string'
+        ? detail
+        : 'Неверный логин или пароль'
+    throw new Error(message)
+  }
   if (res.status === 401) {
     const data = await res.clone().json().catch(() => null)
     if (data?.detail === 'stepup_required') {
@@ -161,8 +173,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
   }
   if (res.status === 401) {
+    const errorData = await res.clone().json().catch(() => null)
+    const detail = errorData?.detail
+    const message = typeof detail === 'object' && detail?.message
+      ? detail.message
+      : typeof detail === 'string'
+        ? detail
+        : null
     authErrorHandler?.(res.status)
-    throw new Error('Unauthorized')
+    throw new Error(message || 'Unauthorized')
   }
   if (res.status === 403) {
     throw new Error('Forbidden')

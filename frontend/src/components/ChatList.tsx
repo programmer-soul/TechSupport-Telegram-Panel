@@ -18,7 +18,7 @@ const statusLabel: Record<string, string> = {
 
 const safeText = (value?: unknown) => {
   if (value === null || value === undefined) return ''
-  if (typeof value === 'string') return value.replace(/<[^>]*>/g, '')
+  if (typeof value === 'string') return value
   return String(value)
 }
 
@@ -91,15 +91,12 @@ export default function ChatList({
           key={chat.id}
           onClick={() => onSelect(chat)}
           className={clsx(
-            'relative text-left p-4 rounded-xl hover:-translate-y-0.5 transition-transform',
+            'relative text-left p-4 rounded-xl transition-colors border',
             selectedId === chat.id
-              ? 'ring-1 ring-ocean-500/50 bg-ocean-600/10 shadow-glow'
-              : 'bg-white/[0.03] hover:bg-white/[0.05]'
+              ? 'bg-white/[0.04] border-white/[0.06]'
+              : 'bg-white/[0.03] hover:bg-white/[0.05] border-white/[0.04]'
           )}
         >
-          {selectedId === chat.id && (
-            <span className="absolute left-0 top-3 bottom-3 w-[3px] rounded-full bg-ocean-500" />
-          )}
           <div className="flex items-center justify-between">
             <div className="text-sm font-display font-semibold flex items-center gap-2">
               <span>

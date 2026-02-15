@@ -117,12 +117,11 @@ async def incoming_message(payload: MessageFromBot, db: AsyncSession = Depends(g
         chat.autoreply_sent = False
         send_autoreply = False
     else:
-        if not chat.autoreply_sent:
-            chat.autoreply_sent = True
-            send_autoreply = True
-    if reopened:
-        send_autoreply = False
+        # Auto-reply should trigger on every incoming client message.
         chat.autoreply_sent = True
+        send_autoreply = True
+    if reopened and payload.text and payload.text.startswith("/start"):
+        send_autoreply = False
 
     msg = Message(
         chat_id=chat.id,

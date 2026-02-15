@@ -39,7 +39,8 @@ export default function AuthPanel({ onAuthSuccess, appName, appDescription }: Au
       await api.telegramOAuthLogin(user)
       onAuthSuccess()
     } catch (err: any) {
-      setError(err.message || 'Ошибка авторизации через Telegram')
+      const message = err?.message === 'Unauthorized' ? 'Неверный логин или пароль' : (err?.message || 'Ошибка авторизации через Telegram')
+      setError(message)
       setLoading(false)
     }
   }, [onAuthSuccess])
@@ -94,7 +95,7 @@ export default function AuthPanel({ onAuthSuccess, appName, appDescription }: Au
       setPassword('')
       onAuthSuccess()
     } catch (err: any) {
-      setError(err.message || 'Неверный логин или пароль')
+      setError('Неверный логин или пароль')
       setLoading(false)
     }
   }

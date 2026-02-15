@@ -179,9 +179,10 @@ function CollapsibleCard({ id, icon, title, subtitle, status, color, children, e
 interface SettingsPanelProps {
   onBrandingChange?: (name: string, description: string, pageTitle: string, faviconUrl: string) => void
   onPanelModeChange?: (mode: 'prod' | 'test') => void
+  onSolobotUsernameChange?: (username: string) => void
 }
 
-export default function SettingsPanel({ onBrandingChange, onPanelModeChange }: SettingsPanelProps) {
+export default function SettingsPanel({ onBrandingChange, onPanelModeChange, onSolobotUsernameChange }: SettingsPanelProps) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [resetting, setResetting] = useState(false)
@@ -207,6 +208,7 @@ export default function SettingsPanel({ onBrandingChange, onPanelModeChange }: S
   const [greetingEnabled, setGreetingEnabled] = useState(true)
   const [autoreply, setAutoreply] = useState('')
   const [autoreplyEnabled, setAutoreplyEnabled] = useState(true)
+  const [autoreplyDelaySec, setAutoreplyDelaySec] = useState('0')
   const [autoreplyDeleteSec, setAutoreplyDeleteSec] = useState('0')
 
   // Remnawave
@@ -267,6 +269,7 @@ export default function SettingsPanel({ onBrandingChange, onPanelModeChange }: S
         setGreetingEnabled(msg.greeting_enabled !== false)
         setAutoreply(msg.autoreply as string || '')
         setAutoreplyEnabled(msg.autoreply_enabled !== false)
+        setAutoreplyDelaySec(String(msg.autoreply_delay_sec || '0'))
         setAutoreplyDeleteSec(String(msg.autoreply_delete_sec || '0'))
       }
 
@@ -300,13 +303,24 @@ export default function SettingsPanel({ onBrandingChange, onPanelModeChange }: S
         api.upsertSetting({ key: 'support_bot', value_json: { username: botUsername, token: botToken } }),
         // Also save token in format expected by bot service
         api.upsertSetting({ key: 'telegram_bot_token', value_json: { token: botToken } }),
-        api.upsertSetting({ key: 'messages', value_json: { greeting, greeting_enabled: greetingEnabled, autoreply, autoreply_enabled: autoreplyEnabled, autoreply_delete_sec: parseInt(autoreplyDeleteSec) || 0 } }),
+        api.upsertSetting({
+          key: 'messages',
+          value_json: {
+            greeting,
+            greeting_enabled: greetingEnabled,
+            autoreply,
+            autoreply_enabled: autoreplyEnabled,
+            autoreply_delay_sec: parseInt(autoreplyDelaySec) || 0,
+            autoreply_delete_sec: parseInt(autoreplyDeleteSec) || 0
+          }
+        }),
         api.upsertSetting({ key: 'remnawave_integration', value_json: { panel_url: remnaUrl, api_token: remnaToken } }),
         api.upsertSetting({ key: 'solobot_integration', value_json: { bot_username: soloUsername, api_url: soloUrl, api_key: soloKey, admin_tg_id: soloAdminId } }),
         api.upsertSetting({ key: 'telegram_oauth', value_json: { enabled: tgOAuthEnabled, bot_username: tgOAuthBot, bot_token: tgOAuthToken } }),
       ])
       onBrandingChange?.(appName, appDesc, pageTitle, faviconUrl)
       onPanelModeChange?.(panelMode)
+      onSolobotUsernameChange?.((soloUsername || '').replace(/^@/, ''))
       showToast('Сохранено', true)
     } catch { showToast('Ошибка', false) }
     finally { setSaving(false) }
@@ -486,7 +500,7 @@ export default function SettingsPanel({ onBrandingChange, onPanelModeChange }: S
               <div className="flex items-center justify-between p-4 rounded-xl bg-white/[0.02] border border-white/[0.06]">
                 <div>
                   <div className="text-[13px] font-medium text-white">Автоответ</div>
-                  <div className="text-[11px] text-white/40 mt-0.5">Отправлять при первом сообщении</div>
+                  <div className="text-[11px] text-white/40 mt-0.5">Отправлять на каждое сообщение клиента</div>
                 </div>
                 <Toggle enabled={autoreplyEnabled} onChange={setAutoreplyEnabled} disabled={saving} />
               </div>
@@ -495,8 +509,16 @@ export default function SettingsPanel({ onBrandingChange, onPanelModeChange }: S
                 value={autoreply}
                 onChange={setAutoreply}
                 placeholder="Спасибо за обращение! Мы ответим в ближайшее время."
-                hint="Отправляется автоматически при первом сообщении"
+                hint="Отправляется автоматически только на сообщения клиента"
                 rows={2}
+                disabled={saving || !autoreplyEnabled}
+              />
+              <Input
+                label="Задержка автоответа (сек)"
+                value={autoreplyDelaySec}
+                onChange={setAutoreplyDelaySec}
+                placeholder="0"
+                hint="0 = отправлять сразу"
                 disabled={saving || !autoreplyEnabled}
               />
               <Input

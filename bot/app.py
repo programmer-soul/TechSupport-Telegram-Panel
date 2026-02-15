@@ -112,6 +112,11 @@ def build_inline_keyboard(buttons_data: list[list[dict]] | None) -> InlineKeyboa
 DEFAULT_AUTOREPLY = os.getenv("BOT_AUTOREPLY", "Сообщение отправлено! Ожидайте ответа.")
 DEFAULT_AUTOREPLY_DELETE_AFTER = int(os.getenv("BOT_AUTOREPLY_DELETE_AFTER", "5"))
 
+
+def plain_text(value: str | None) -> str:
+    """Keep text as plain user content, preserving all symbols and line breaks."""
+    return value if isinstance(value, str) else ""
+
 # Bot will be initialized later when token is available
 bot: Bot | None = None
 TELEGRAM_TOKEN: str = ""
@@ -424,6 +429,7 @@ async def handle_any(message: Message) -> None:
         messages_settings = await fetch_setting("messages") or {}
         autoreply_enabled = messages_settings.get("autoreply_enabled", True)
         autoreply_text = messages_settings.get("autoreply")
+        send_delay = messages_settings.get("autoreply_delay_sec", 0)
         delete_after = messages_settings.get("autoreply_delete_sec")
 
         if not autoreply_enabled:
@@ -431,16 +437,26 @@ async def handle_any(message: Message) -> None:
 
         if not autoreply_text:
             autoreply_text = DEFAULT_AUTOREPLY
+        try:
+            delay_before_send = int(send_delay) if str(send_delay).isdigit() else 0
+        except Exception:
+            delay_before_send = 0
         if delete_after is None:
             delete_after = DEFAULT_AUTOREPLY_DELETE_AFTER
 
-        reply = await message.answer(str(autoreply_text))
+        if delay_before_send > 0:
+            await asyncio.sleep(delay_before_send)
+        safe_autoreply = plain_text(str(autoreply_text))
+        try:
+            reply = await message.answer(html.escape(safe_autoreply))
+        except TelegramBadRequest:
+            reply = await message.answer(safe_autoreply)
         await backend_request(
             "POST",
             "/api/bot/outgoing",
             {
                 "tg_id": message.from_user.id,
-                "text": str(autoreply_text),
+                "text": safe_autoreply,
                 "type": "text",
                 "telegram_message_id": reply.message_id,
                 "attachments": [],
@@ -500,7 +516,7 @@ async def handle_internal_send(request: web.Request) -> web.Response:
         return web.json_response({"error": "bot_not_initialized"}, status=503)
     data = await request.json()
     tg_id = int(data.get("tg_id"))
-    text = data.get("text") or ""
+    text = plain_text(data.get("text"))
     msg_type = data.get("type", "text")
     reply_to = data.get("reply_to_telegram_message_id")
     attachments = data.get("attachments", [])
@@ -641,7 +657,7 @@ async def handle_internal_send(request: web.Request) -> web.Response:
             file_input = to_file_input(attachment)
             
             async def send_single_attachment(markup, caption_override=None):
-                cap = caption_override if caption_override is not None else (text or None)
+                cap = caption_override if caption_override is not None else (html.escape(text) if text else None)
                 if msg_type == "photo":
                     return await bot.send_photo(tg_id, photo=file_input, caption=cap, reply_to_message_id=reply_to, reply_markup=markup)
                 elif msg_type == "video":
@@ -683,7 +699,7 @@ async def handle_internal_send(request: web.Request) -> web.Response:
                 return web.json_response({"ok": False, "error": "too_large"}, status=413)
     else:
         try:
-            sent_msg = await bot.send_message(tg_id, text, reply_to_message_id=reply_to, reply_markup=reply_markup)
+            sent_msg = await bot.send_message(tg_id, html.escape(text), reply_to_message_id=reply_to, reply_markup=reply_markup)
             sent_telegram_message_id = sent_msg.message_id
         except TelegramBadRequest as e:
             if "can't parse entities" in str(e).lower():
@@ -694,7 +710,7 @@ async def handle_internal_send(request: web.Request) -> web.Response:
                 # Invalid inline keyboard URL - send without buttons
                 logger.warning(f"Invalid inline keyboard URL, sending without buttons: {e}")
                 await send_system_to_panel(tg_id, f"⚠️ Кнопка не добавлена: неверный URL")
-                sent_msg = await bot.send_message(tg_id, text, reply_to_message_id=reply_to)
+                sent_msg = await bot.send_message(tg_id, html.escape(text), reply_to_message_id=reply_to)
                 sent_telegram_message_id = sent_msg.message_id
             else:
                 raise

@@ -224,6 +224,8 @@ async def delete_message(
     msg = msg_result.scalar_one_or_none()
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
+    if msg.type == MessageType.system:
+        raise HTTPException(status_code=403, detail="System messages cannot be deleted")
 
     tg_id = chat.tg_id
     tg_msg_id = msg.telegram_message_id

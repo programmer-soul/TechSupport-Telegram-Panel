@@ -7,7 +7,7 @@ const formatDate = (value?: string | null) => {
   return isNaN(date.getTime()) ? '' : date.toLocaleString()
 }
 
-const safeText = (value?: string | null) => (value ? value.replace(/<[^>]*>/g, '') : '')
+const safeText = (value?: string | null) => (value ? value : '')
 const truncate = (value: string, max = 26) => (value.length > max ? `${value.slice(0, max - 1)}…` : value)
 
 const formatEpoch = (value?: number | null) => {
@@ -119,7 +119,35 @@ const renderKeyValues = (obj: Record<string, any>) => {
     username: 'Username',
     first_name: 'Имя',
     last_name: 'Фамилия',
-    balance: 'Баланс'
+    balance: 'Баланс',
+    language_code: 'Язык',
+    is_bot: 'Бот',
+    trial: 'Триал',
+    total_payments_amount: 'Сумма пополнений',
+    total_payments_count: 'Количество пополнений',
+    referral_count: 'Рефералы',
+    source_invite: 'Источник',
+    partner_balance: 'Партнёрский баланс'
+  }
+  const formatValue = (key: string, value: any) => {
+    if (typeof value === 'boolean') return value ? 'Да' : 'Нет'
+    if (value === null || value === undefined || value === '') return '—'
+    if (typeof value === 'string' && (key.endsWith('_at') || key.includes('date'))) {
+      const asDate = formatDate(value)
+      return asDate || value
+    }
+    if (typeof value === 'number' && (key.includes('amount') || key.includes('balance'))) {
+      return formatRubles(value)
+    }
+    if (key === 'trial') {
+      const map: Record<string, string> = {
+        '0': 'не использован',
+        '1': 'использован',
+        '-1': 'доп. дни, не использован'
+      }
+      return map[String(value)] || String(value)
+    }
+    return typeof value === 'object' ? JSON.stringify(value) : String(value)
   }
   return (
     <div className="grid grid-cols-1 gap-2 text-xs text-white/70">
@@ -130,7 +158,7 @@ const renderKeyValues = (obj: Record<string, any>) => {
         >
           <div className="text-white/50">{labelMap[key] || key}</div>
           <div className="text-right break-all font-mono text-white/80">
-            {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+            {formatValue(key, value)}
           </div>
         </div>
       ))}
@@ -682,13 +710,8 @@ export default function ProfilePanel({
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [keyFilter, setKeyFilter] = useState('')
   const [paymentFilter, setPaymentFilter] = useState('')
-  const [tab, setTab] = useState<'details' | 'subscriptions' | 'payments' | 'partner' | 'devices' | 'chat'>('details')
-  const [keysOpen, setKeysOpen] = useState(false)
-  const [paymentsOpen, setPaymentsOpen] = useState(true)
-  const [referralsOpen, setReferralsOpen] = useState(false)
   const [referralItemsOpen, setReferralItemsOpen] = useState<Record<string, boolean>>({})
   const [deviceGroupsOpen, setDeviceGroupsOpen] = useState<Record<string, boolean>>({})
-  const [deviceFilter, setDeviceFilter] = useState<string | null>(null)
   const [keyItemsOpen, setKeyItemsOpen] = useState<Record<string, boolean>>({})
   const [deviceConfirm, setDeviceConfirm] = useState<{ userUuid: string; hwid: string; label?: string } | null>(null)
   const cacheRef = useRef<Record<number, ExternalProfile>>({})
@@ -707,7 +730,6 @@ export default function ProfilePanel({
       })
       .catch(() => setProfile(null))
       .finally(() => setLoading(false))
-    setDeviceFilter(null)
   }, [chat?.tg_id])
 
   useEffect(() => {
@@ -740,8 +762,6 @@ export default function ProfilePanel({
   }
 
   const openDevicesForSubscription = (subscriptionUuid: string) => {
-    setTab('devices')
-    setDeviceFilter(subscriptionUuid)
     setDeviceGroupsOpen((prev) => ({ ...prev, [subscriptionUuid]: true }))
   }
 
@@ -769,6 +789,46 @@ export default function ProfilePanel({
     window.open(`https://t.me/${chat.tg_id}`, '_blank')
   }
 
+  const userData = (profile?.user || {}) as Record<string, any>
+  const summary = ((profile as any)?.summary || {}) as Record<string, any>
+  const trialStatusMap: Record<string, string> = {
+    '0': 'не использован',
+    '1': 'использован',
+    '-1': 'доп. дни, не использован',
+  }
+  const referralCount = Number(summary.referral_count ?? ((profile?.referrals || []).length || 0))
+  const totalPaymentsCount = Number(
+    summary.total_payments_count ??
+      (profile?.payments || []).filter((p: any) => String(p?.status || '').toLowerCase() === 'success').length
+  )
+  const totalPaymentsAmount = Number(
+    summary.total_payments_amount ??
+      (profile?.payments || [])
+        .filter((p: any) => String(p?.status || '').toLowerCase() === 'success')
+        .reduce((acc: number, p: any) => acc + Number(p?.amount || 0), 0)
+  )
+  const sourceInvite = summary.source_invite || userData.source_code || '-'
+  const remUsersList = Array.isArray(profile?.remnawave)
+    ? (profile?.remnawave as any[])
+    : profile?.remnawave
+      ? [profile.remnawave as any]
+      : []
+  const tariffRows = Array.isArray(profile?.tariffs) ? profile.tariffs : []
+  const userExtra = compactObject(userData)
+  ;[
+    'tg_id',
+    'id',
+    'username',
+    'first_name',
+    'last_name',
+    'created_at',
+    'trial',
+    'balance',
+    'partner_balance',
+    'source_code'
+  ].forEach((k) => delete userExtra[k])
+  const summaryData = compactObject(summary)
+
   return (
     <div className="card relative p-4 sm:p-5 h-full flex flex-col gap-3 overflow-hidden">
       {updatedToast && (
@@ -781,11 +841,7 @@ export default function ProfilePanel({
           ✓ {actionToast}
         </div>
       )}
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="text-lg font-display font-semibold">Информация о пользователе</div>
-          <div className="text-xs text-white/50">Детали, подписки, устройства</div>
-        </div>
+      <div className="flex items-start justify-end">
         {onBack && (
           <button
             onClick={onBack}
@@ -834,32 +890,9 @@ export default function ProfilePanel({
               {chat.tg_username && <div className="text-xs text-white/50">@{truncate(safeText(chat.tg_username), 24)}</div>}
             </div>
           </div>
-
-
-          <div className="rounded-3xl bg-white/5 border border-white/10 p-2 flex gap-2 flex-wrap">
-            {[
-              { key: 'details', label: 'Детали' },
-              { key: 'subscriptions', label: 'Подписки' },
-              { key: 'payments', label: 'Платежи' },
-              { key: 'partner', label: 'Партнерка' },
-              { key: 'devices', label: 'Устройства' },
-              { key: 'chat', label: 'Чат' },
-            ].map((item) => (
-              <button
-                key={item.key}
-                onClick={() => setTab(item.key as any)}
-                className={`flex-1 min-w-[120px] rounded-2xl px-3 py-2 text-xs ${
-                  tab === item.key ? 'bg-white/10 text-white' : 'text-white/50'
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-
-          {tab === 'details' && (
+          {(
             <div className="rounded-3xl bg-white/5 border border-white/10 p-4">
-              <div className="text-white/80 font-medium">Детальная информация</div>
+              <div className="text-white/80 font-medium">Информация о пользователе</div>
               <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-white/70">
                 {[chat.first_name, chat.last_name].filter(Boolean).join(' ') && (
                   <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/5 px-3 py-2">
@@ -881,25 +914,127 @@ export default function ProfilePanel({
                   <div className="text-white/50">Регистрация в боте</div>
                   <div className="text-right font-mono text-white/80">{profile?.user ? 'Да' : 'Нет'}</div>
                 </div>
-                {(profile?.user as any)?.balance !== undefined && (
-                  <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/5 px-3 py-2">
-                    <div className="text-white/50">Баланс</div>
-                    <div className="text-right font-mono text-white/80">
-                      {formatRubles((profile?.user as any)?.balance)}
+                {!!profile?.user && (
+                  <>
+                    {(userData?.created_at || summary?.created_at) && (
+                      <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/5 px-3 py-2">
+                        <div className="text-white/50">Регистрация</div>
+                        <div className="text-right font-mono text-white/80">{formatDate(userData?.created_at || summary?.created_at)}</div>
+                      </div>
+                    )}
+                    {(userData?.trial !== undefined || summary?.trial !== undefined) && (
+                      <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/5 px-3 py-2">
+                        <div className="text-white/50">Триал</div>
+                        <div className="text-right font-mono text-white/80">
+                          {trialStatusMap[String(userData?.trial ?? summary?.trial)] || '—'}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+                {!!profile?.user && (
+                  <>
+                    {(userData as any)?.balance !== undefined && (
+                      <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/5 px-3 py-2">
+                        <div className="text-white/50">Баланс</div>
+                        <div className="text-right font-mono text-white/80">
+                          {formatRubles((userData as any)?.balance)}
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/5 px-3 py-2">
+                      <div className="text-white/50">Пополнения</div>
+                      <div className="text-right font-mono text-white/80">
+                        {formatRubles(totalPaymentsAmount)} ({totalPaymentsCount} шт.)
+                      </div>
                     </div>
+                    <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/5 px-3 py-2">
+                      <div className="text-white/50">Рефералы</div>
+                      <div className="text-right font-mono text-white/80">{referralCount}</div>
+                    </div>
+                    <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/5 px-3 py-2">
+                      <div className="text-white/50">Приглашён</div>
+                      <div className="text-right font-mono text-white/80 break-all">{String(sourceInvite || '-')}</div>
+                    </div>
+                    {(userData as any)?.partner_balance !== undefined && (
+                      <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/5 px-3 py-2">
+                        <div className="text-white/50">Партнёрка баланс</div>
+                        <div className="text-right font-mono text-white/80">{formatRubles((userData as any)?.partner_balance)}</div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {(profile?.user || Object.keys(summaryData).length > 0 || remUsersList.length > 0 || tariffRows.length > 0) && (
+            <div className="rounded-3xl bg-gradient-to-br from-white/[0.04] to-transparent border border-white/[0.08] p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg">
+                    <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75h16.5v16.5H3.75V3.75zm4.5 4.5h7.5m-7.5 3h7.5m-7.5 3h4.5" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="text-white font-semibold">Все данные профиля</div>
+                    <div className="text-[11px] text-white/40">Поля из интеграций Solobot и Remnawave</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {!!profile?.user && (
+                  <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-3">
+                    <div className="text-[12px] text-white/70 mb-2">Пользователь (доп. поля)</div>
+                    {Object.keys(userExtra).length > 0 ? (
+                      renderKeyValues(userExtra)
+                    ) : (
+                      <div className="text-xs text-white/40">Дополнительных полей нет</div>
+                    )}
                   </div>
                 )}
-                {(profile?.user as any)?.created_at && (
-                  <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/5 px-3 py-2">
-                    <div className="text-white/50">Дата регистрации</div>
-                    <div className="text-right font-mono text-white/80">{formatDate((profile?.user as any)?.created_at)}</div>
+
+                {Object.keys(summaryData).length > 0 && (
+                  <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-3">
+                    <div className="text-[12px] text-white/70 mb-2">Сводка</div>
+                    {renderKeyValues(summaryData)}
+                  </div>
+                )}
+
+                {tariffRows.length > 0 && (
+                  <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-3">
+                    <div className="text-[12px] text-white/70 mb-2">Тарифы ({tariffRows.length})</div>
+                    {renderTable(
+                      tariffRows,
+                      [
+                        { key: 'name', label: 'Название' },
+                        { key: 'subgroup_title', label: 'Группа' },
+                        { key: 'device_limit', label: 'Лимит устройств' }
+                      ],
+                      '220px'
+                    )}
+                  </div>
+                )}
+
+                {remUsersList.length > 0 && (
+                  <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-3">
+                    <div className="text-[12px] text-white/70 mb-2">Remnawave ({remUsersList.length})</div>
+                    <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1 scrollbar-thin">
+                      {remUsersList.map((remUser: any, idx: number) => (
+                        <div key={idx} className="rounded-xl bg-white/[0.04] border border-white/5 p-3">
+                          {renderRemnawaveUser(remUser)}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          {tab === 'subscriptions' && (
+          {profile?.user && (
             <div className="rounded-3xl bg-gradient-to-br from-white/[0.04] to-transparent border border-white/[0.08] p-5">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
@@ -921,27 +1056,15 @@ export default function ProfilePanel({
               </div>
 
               <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-                <button
-                  onClick={() => setKeysOpen((v) => !v)}
-                  className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors"
-                >
-                  <div className="flex items-center gap-2 text-white/70">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-                    </svg>
-                    <span className="text-sm font-medium">Список ключей</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-white/40">{keysOpen ? 'Свернуть' : 'Развернуть'}</span>
-                    <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-white/40 transition-transform duration-200 ${keysOpen ? 'rotate-180' : ''}`}>
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  <div className="px-4 py-3 flex items-center justify-between border-b border-white/[0.06]">
+                    <div className="flex items-center gap-2 text-white/70">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
                       </svg>
+                      <span className="text-sm font-medium">Список ключей</span>
                     </div>
                   </div>
-                </button>
-                {keysOpen && (
-                  <div className="border-t border-white/[0.06] p-4">
+                  <div className="p-4">
                     <div className="relative mb-4">
                       <div className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30">
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -974,12 +1097,11 @@ export default function ProfilePanel({
                       )}
                     </div>
                   </div>
-                )}
               </div>
             </div>
           )}
 
-          {tab === 'payments' && (
+          {profile?.user && (
             <div className="rounded-3xl bg-gradient-to-br from-white/[0.04] to-transparent border border-white/[0.08] p-5">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
@@ -999,27 +1121,15 @@ export default function ProfilePanel({
               </div>
 
               <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-                <button
-                  onClick={() => setPaymentsOpen((v) => !v)}
-                  className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors"
-                >
-                  <div className="flex items-center gap-2 text-white/70">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-                    </svg>
-                    <span className="text-sm font-medium">История платежей</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-white/40">{paymentsOpen ? 'Свернуть' : 'Развернуть'}</span>
-                    <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-white/40 transition-transform duration-200 ${paymentsOpen ? 'rotate-180' : ''}`}>
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  <div className="px-4 py-3 flex items-center justify-between border-b border-white/[0.06]">
+                    <div className="flex items-center gap-2 text-white/70">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
                       </svg>
+                      <span className="text-sm font-medium">История платежей</span>
                     </div>
                   </div>
-                </button>
-                {paymentsOpen && (
-                  <div className="border-t border-white/[0.06] p-4">
+                  <div className="p-4">
                     <div className="relative mb-4">
                       <div className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30">
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1041,12 +1151,11 @@ export default function ProfilePanel({
                       )}
                     </div>
                   </div>
-                )}
               </div>
             </div>
           )}
 
-          {tab === 'partner' && (
+          {profile?.user && (
             <div className="rounded-3xl bg-gradient-to-br from-white/[0.04] to-transparent border border-white/[0.08] p-5">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
@@ -1066,26 +1175,15 @@ export default function ProfilePanel({
               </div>
 
               <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-                <button
-                  onClick={() => setReferralsOpen((v) => !v)}
-                  className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors"
-                >
-                  <div className="flex items-center gap-2 text-white/70">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
-                    </svg>
-                    <span className="text-sm font-medium">Список рефералов</span>
-                  </div>
-                  <div className="flex items-center">
-                    <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-white/40 transition-transform duration-200 ${referralsOpen ? 'rotate-180' : ''}`}>
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  <div className="px-4 py-3 flex items-center justify-between border-b border-white/[0.06]">
+                    <div className="flex items-center gap-2 text-white/70">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
                       </svg>
+                      <span className="text-sm font-medium">Список рефералов</span>
                     </div>
                   </div>
-                </button>
-                {referralsOpen && (
-                  <div className="border-t border-white/[0.06] p-4">
+                  <div className="p-4">
                     <div className="max-h-[400px] overflow-y-auto pr-1 scrollbar-thin space-y-2">
                       {(profile?.referrals || []).length === 0 && (
                         <div className="flex flex-col items-center justify-center py-8 text-white/40">
@@ -1185,57 +1283,25 @@ export default function ProfilePanel({
                       })}
                     </div>
                   </div>
-                )}
               </div>
             </div>
           )}
-          {tab === 'devices' && (
+          {profile?.user && (
             <div className="rounded-3xl bg-white/5 border border-white/10 p-4">
               <div className="text-white/80 font-medium">Устройства</div>
-              {Array.isArray(profile?.remnawave_devices) && profile?.remnawave_devices.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                  <button
-                    onClick={() => setDeviceFilter(null)}
-                    className={`rounded-full border px-3 py-1 ${
-                      !deviceFilter ? 'border-white/20 text-white' : 'border-white/10 text-white/50 hover:bg-white/10'
-                    }`}
-                  >
-                    Все устройства
-                  </button>
-                  {Object.entries(
-                    (profile?.remnawave_devices || []).reduce((acc: Record<string, any>, d: any) => {
-                      const key = d?.subscription_uuid || 'unknown'
-                      if (!acc[key]) acc[key] = d
-                      return acc
-                    }, {})
-                  ).map(([subKey, item]) => (
-                    <button
-                      key={subKey}
-                      onClick={() => openDevicesForSubscription(subKey)}
-                      className={`rounded-full border px-3 py-1 ${
-                        deviceFilter === subKey
-                          ? 'border-white/20 text-white'
-                          : 'border-white/10 text-white/50 hover:bg-white/10'
-                      }`}
-                    >
-                      {item?.subscription_username || subKey}
-                    </button>
-                  ))}
-                </div>
-              )}
               <div className="mt-3 max-h-[560px] overflow-y-auto pr-1 scrollbar-thin">
                 {renderDeviceGroups(
                   profile?.remnawave_devices || [],
                   deviceGroupsOpen,
                   (key) => setDeviceGroupsOpen((prev) => ({ ...prev, [key]: !(prev[key] ?? false) })),
                   (userUuid, hwid) => setDeviceConfirm({ userUuid, hwid }),
-                  deviceFilter
+                  null
                 )}
               </div>
             </div>
           )}
 
-          {tab === 'chat' && (
+          {profile?.user && (
             <div className="rounded-3xl bg-white/5 border border-white/10 p-4">
               <div className="text-white/80 font-medium">Информация о чате</div>
               <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-white/70">
@@ -1274,7 +1340,7 @@ export default function ProfilePanel({
         </div>
       )}
 
-      {chat && (
+      {chat && profile?.user && (
         <div className="mt-auto flex flex-col gap-2">
           {panelMode !== 'test' && (
             <button
@@ -1284,35 +1350,31 @@ export default function ProfilePanel({
               Открыть в боте
             </button>
           )}
-          <button
-            onClick={async () => {
-              if (!chat) return
-              await api.escalateChat(chat.id)
-              setActionToast('Чат передан администратору')
-              onChatUpdated?.({ ...chat, status: 'ESCALATED' })
-            }}
-            className="w-full rounded-full border border-white/10 py-2 text-sm text-white/70 hover:bg-white/10 active:bg-white/20 touch-manipulation"
-          >
-            Передать админу
-          </button>
-          <button
-            onClick={async () => {
-              if (!chat) return
-              await api.closeChat(chat.id)
-              setActionToast('Чат успешно закрыт')
-              onChatUpdated?.({ ...chat, status: 'CLOSED' })
-            }}
-            className="w-full rounded-full border border-white/10 py-2 text-sm text-white/70 hover:bg-white/10 active:bg-white/20 touch-manipulation"
-          >
-            Закрыть чат
-          </button>
-          {userRole === 'administrator' && panelMode !== 'test' && (
-            <button
-              onClick={() => setDeleteConfirm(true)}
-              className="w-full rounded-full bg-rose-500/10 border border-rose-500/30 py-2 text-sm text-rose-300 hover:bg-rose-500/20 transition-colors"
-            >
-              Удалить чат
-            </button>
+          {chat.status !== 'ESCALATED' && chat.status !== 'CLOSED' && (
+            <>
+              <button
+                onClick={async () => {
+                  if (!chat) return
+                  await api.escalateChat(chat.id)
+                  setActionToast('Чат передан администратору')
+                  onChatUpdated?.({ ...chat, status: 'ESCALATED' })
+                }}
+                className="w-full rounded-full border border-white/10 py-2 text-sm text-white/70 hover:bg-white/10 active:bg-white/20 touch-manipulation"
+              >
+                Передать админу
+              </button>
+              <button
+                onClick={async () => {
+                  if (!chat) return
+                  await api.closeChat(chat.id)
+                  setActionToast('Чат успешно закрыт')
+                  onChatUpdated?.({ ...chat, status: 'CLOSED' })
+                }}
+                className="w-full rounded-full border border-rose-500/35 bg-rose-500/10 py-2 text-sm text-rose-200 hover:bg-rose-500/20 active:bg-rose-500/25 touch-manipulation"
+              >
+                Закрыть чат
+              </button>
+            </>
           )}
         </div>
       )}
