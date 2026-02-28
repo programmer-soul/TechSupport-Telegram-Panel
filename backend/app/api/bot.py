@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 
 from app.core.config import get_settings
 from app.db.session import get_db
@@ -27,6 +28,12 @@ settings = get_settings()
 def verify_internal_token(x_internal_token: str = Header(...)) -> None:
     if x_internal_token != settings.bot_internal_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+class ChatDeliveryStateFromBot(BaseModel):
+    tg_id: int
+    blocked: bool
+    reason: str | None = None
 
 
 @router.post("/chat", response_model=ChatOut, dependencies=[Depends(verify_internal_token)])
@@ -96,8 +103,12 @@ async def incoming_message(payload: MessageFromBot, db: AsyncSession = Depends(g
             chat.language_code = payload.language_code
         if payload.photo_url and payload.photo_url != chat.photo_url:
             chat.photo_url = payload.photo_url
+        if chat.bot_blocked:
+            chat.bot_blocked = False
+            chat.bot_blocked_reason = None
+            chat.bot_blocked_at = None
         # При повторном сообщении в закрытый чат - возвращаем в "Новые"
-        if chat.status == ChatStatus.closed:
+        if chat.status == ChatStatus.closed and not chat.admin_blocked:
             chat.status = ChatStatus.new
             reopened = True
             reopen_msg = Message(
@@ -113,61 +124,127 @@ async def incoming_message(payload: MessageFromBot, db: AsyncSession = Depends(g
                 {"chat_id": str(chat.id), "message": serialize_message(reopen_msg, [])},
             )
 
-    if payload.text and payload.text.startswith("/start"):
+    # Hard ignore inbound from manually blocked users: no auto-replies, no messages in panel.
+    if chat.admin_blocked:
+        if chat.status != ChatStatus.closed:
+            chat.status = ChatStatus.closed
+        chat.last_message_at = datetime.now(timezone.utc)
+        await db.commit()
+        await manager.broadcast(
+            "chat_updated",
+            {
+                "id": str(chat.id),
+                "status": chat.status.value if hasattr(chat.status, "value") else str(chat.status),
+                "last_message_at": chat.last_message_at,
+                "admin_blocked": chat.admin_blocked,
+                "admin_blocked_at": chat.admin_blocked_at,
+            },
+        )
+        return {"ok": True, "send_autoreply": False, "ignored": True}
+
+    is_start_command = bool(payload.text and payload.text.startswith("/start"))
+    grouped_msg: Message | None = None
+    if payload.telegram_media_group_id and not is_start_command:
+        grouped_result = await db.execute(
+            select(Message)
+            .options(selectinload(Message.attachments))
+            .where(
+                Message.chat_id == chat.id,
+                Message.direction == MessageDirection.inbound,
+                Message.telegram_media_group_id == payload.telegram_media_group_id,
+            )
+            .order_by(Message.created_at.asc())
+        )
+        grouped_msg = grouped_result.scalars().first()
+
+    if is_start_command:
         chat.autoreply_sent = False
         send_autoreply = False
     else:
-        # Auto-reply should trigger on every incoming client message.
-        chat.autoreply_sent = True
-        send_autoreply = True
-    if reopened and payload.text and payload.text.startswith("/start"):
+        send_autoreply = grouped_msg is None
+        chat.autoreply_sent = send_autoreply
+    if reopened and is_start_command:
         send_autoreply = False
 
-    msg = Message(
-        chat_id=chat.id,
-        direction=MessageDirection.inbound,
-        type=payload.type,
-        text=payload.text,
-        telegram_message_id=payload.telegram_message_id,
-        reply_to_telegram_message_id=payload.reply_to_telegram_message_id,
-        telegram_media_group_id=payload.telegram_media_group_id,
-        forward_from_name=payload.forward_from_name,
-        forward_from_username=payload.forward_from_username,
-        forward_date=payload.forward_date,
-    )
-    db.add(msg)
-    await db.flush()
+    msg: Message | None = None
+    attachments: list[Attachment] = []
+    created_event = False
 
-    attachments = []
-    for a in payload.attachments:
-        attachment = Attachment(
-            message_id=msg.id,
-            telegram_file_id=a.telegram_file_id,
-            local_path=a.local_path,
-            url=a.url,
-            mime=a.mime,
-            name=a.name,
-            size=a.size,
-            meta=a.meta,
+    if not is_start_command and grouped_msg:
+        msg = grouped_msg
+        if payload.text and not msg.text:
+            msg.text = payload.text
+        if payload.reply_to_telegram_message_id and not msg.reply_to_telegram_message_id:
+            msg.reply_to_telegram_message_id = payload.reply_to_telegram_message_id
+        for a in payload.attachments:
+            attachment = Attachment(
+                message_id=msg.id,
+                telegram_file_id=a.telegram_file_id,
+                local_path=a.local_path,
+                url=a.url,
+                mime=a.mime,
+                name=a.name,
+                size=a.size,
+                meta=a.meta,
+            )
+            db.add(attachment)
+            attachments.append(attachment)
+        if attachments:
+            await db.flush()
+    elif not is_start_command:
+        msg = Message(
+            chat_id=chat.id,
+            direction=MessageDirection.inbound,
+            type=payload.type,
+            text=payload.text,
+            telegram_message_id=payload.telegram_message_id,
+            reply_to_telegram_message_id=payload.reply_to_telegram_message_id,
+            telegram_media_group_id=payload.telegram_media_group_id,
+            forward_from_name=payload.forward_from_name,
+            forward_from_username=payload.forward_from_username,
+            forward_date=payload.forward_date,
         )
-        db.add(attachment)
-        attachments.append(attachment)
-    if attachments:
+        db.add(msg)
         await db.flush()
+        created_event = True
 
-    chat.unread_count = (chat.unread_count or 0) + 1
-    chat.last_message_at = datetime.now(timezone.utc)
-    # Не меняем статус на active - это произойдёт только после первого ответа оператора
-    # Автоприветствие не должно переводить тикет в активные
+        for a in payload.attachments:
+            attachment = Attachment(
+                message_id=msg.id,
+                telegram_file_id=a.telegram_file_id,
+                local_path=a.local_path,
+                url=a.url,
+                mime=a.mime,
+                name=a.name,
+                size=a.size,
+                meta=a.meta,
+            )
+            db.add(attachment)
+            attachments.append(attachment)
+        if attachments:
+            await db.flush()
+
+    if msg is not None and created_event:
+        chat.unread_count = (chat.unread_count or 0) + 1
+    if msg is not None:
+        chat.last_message_at = datetime.now(timezone.utc)
 
     await db.commit()
-    await db.refresh(msg)
-    await manager.broadcast(
-        "message_created",
-        {"chat_id": str(chat.id), "message": serialize_message(msg, attachments)},
-    )
-    # Send full chat update with preview
-    preview = msg.text[:100] if msg.text else msg.type.value if msg.type else ""
+
+    preview = ""
+    if msg is not None:
+        refreshed_msg_result = await db.execute(
+            select(Message)
+            .options(selectinload(Message.attachments))
+            .where(Message.id == msg.id)
+        )
+        refreshed_msg = refreshed_msg_result.scalar_one()
+        preview = refreshed_msg.text[:100] if refreshed_msg.text else refreshed_msg.type.value if refreshed_msg.type else ""
+        await manager.broadcast(
+            "message_created" if created_event else "message_updated",
+            {"chat_id": str(chat.id), "message": serialize_message(refreshed_msg, refreshed_msg.attachments or [])},
+        )
+
     await manager.broadcast(
         "chat_updated",
         {
@@ -176,9 +253,81 @@ async def incoming_message(payload: MessageFromBot, db: AsyncSession = Depends(g
             "last_message_at": chat.last_message_at,
             "last_message_preview": preview,
             "status": chat.status.value if hasattr(chat.status, 'value') else str(chat.status),
+            "bot_blocked": chat.bot_blocked,
+            "bot_blocked_reason": chat.bot_blocked_reason,
+            "bot_blocked_at": chat.bot_blocked_at,
         },
     )
     return {"ok": True, "send_autoreply": send_autoreply}
+
+
+@router.post("/chat-delivery-state", dependencies=[Depends(verify_internal_token)])
+async def chat_delivery_state(payload: ChatDeliveryStateFromBot, db: AsyncSession = Depends(get_db)) -> dict:
+    result = await db.execute(select(Chat).where(Chat.tg_id == payload.tg_id))
+    chat = result.scalar_one_or_none()
+    if not chat:
+        return {"ok": False, "reason": "chat_not_found"}
+
+    was_blocked = bool(chat.bot_blocked)
+    prev_reason = chat.bot_blocked_reason
+    chat.bot_blocked = bool(payload.blocked)
+    chat.bot_blocked_reason = payload.reason if payload.blocked else None
+    chat.bot_blocked_at = datetime.now(timezone.utc) if payload.blocked else None
+    if payload.blocked and chat.status != ChatStatus.closed:
+        chat.status = ChatStatus.closed
+
+    system_msg: Message | None = None
+    if payload.blocked and not was_blocked:
+        if payload.reason == "blocked":
+            text = "Пользователь заблокировал бота. Чат закрыт автоматически."
+        elif payload.reason == "stopped_or_never_started":
+            text = "Пользователь остановил бота. Чат закрыт автоматически."
+        else:
+            text = "Пользователь стал недоступен для сообщений. Чат закрыт автоматически."
+        system_msg = Message(
+            chat_id=chat.id,
+            direction=MessageDirection.outbound,
+            type=MessageType.system,
+            text=text,
+        )
+        db.add(system_msg)
+        chat.last_message_at = datetime.now(timezone.utc)
+    elif (not payload.blocked) and was_blocked:
+        if prev_reason == "blocked":
+            text = "Пользователь разблокировал бота."
+        elif prev_reason == "stopped_or_never_started":
+            text = "Пользователь снова запустил бота."
+        else:
+            text = "Пользователь снова доступен для сообщений."
+        system_msg = Message(
+            chat_id=chat.id,
+            direction=MessageDirection.outbound,
+            type=MessageType.system,
+            text=text,
+        )
+        db.add(system_msg)
+        chat.last_message_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    if system_msg is not None:
+        await db.refresh(system_msg)
+        await manager.broadcast(
+            "message_created",
+            {"chat_id": str(chat.id), "message": serialize_message(system_msg, [])},
+        )
+
+    update_payload = {
+        "id": str(chat.id),
+        "last_message_at": chat.last_message_at,
+        "status": chat.status.value if hasattr(chat.status, "value") else str(chat.status),
+        "bot_blocked": chat.bot_blocked,
+        "bot_blocked_reason": chat.bot_blocked_reason,
+        "bot_blocked_at": chat.bot_blocked_at,
+    }
+    if system_msg is not None:
+        update_payload["last_message_preview"] = system_msg.text
+    await manager.broadcast("chat_updated", update_payload)
+    return {"ok": True}
 
 
 @router.post("/outgoing", dependencies=[Depends(verify_internal_token)])

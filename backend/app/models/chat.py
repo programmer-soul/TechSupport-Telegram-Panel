@@ -1,7 +1,6 @@
 import uuid
 from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Index, Integer, String, Boolean, Text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -28,6 +27,11 @@ class Chat(Base, TimestampMixin):
     unread_count: Mapped[int] = mapped_column(Integer, default=0)
     last_message_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     autoreply_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    bot_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    bot_blocked_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    bot_blocked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    admin_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    admin_blocked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     escalated_to_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
@@ -39,3 +43,5 @@ class Chat(Base, TimestampMixin):
 Index("ix_chats_tg_id", Chat.tg_id)
 Index("ix_chats_status", Chat.status)
 Index("ix_chats_last_message_at", Chat.last_message_at)
+Index("ix_chats_status_last_message_created", Chat.status, Chat.last_message_at.desc(), Chat.created_at.desc())
+Index("ix_chats_unread_positive", Chat.unread_count, postgresql_where=Chat.unread_count > 0)

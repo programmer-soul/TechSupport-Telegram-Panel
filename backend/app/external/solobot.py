@@ -44,6 +44,10 @@ class SolobotClient:
         path = "/api/referrals/all/{tg_id}"
         return await self._safe_request("get", path, params=self._admin_params(tg_id), path_params={"tg_id": tg_id})
 
+    async def get_partner_data(self, tg_id: int) -> dict | None:
+        path = "/api/partners/{tg_id}"
+        return await self._safe_request("get", path, params=self._admin_params(tg_id), path_params={"tg_id": tg_id})
+
     def _admin_params(self, target_tg_id: int) -> dict[str, Any]:
         return {"tg_id": self.admin_tg_id} if self.admin_tg_id is not None else {"tg_id": target_tg_id}
 

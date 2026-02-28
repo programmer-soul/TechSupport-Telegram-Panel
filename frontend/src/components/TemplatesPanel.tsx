@@ -15,6 +15,7 @@ export default function TemplatesPanel() {
   const [successToast, setSuccessToast] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [movingId, setMovingId] = useState<number | null>(null)
 
   const load = () => api.listTemplates().then(setItems)
 
@@ -44,9 +45,56 @@ export default function TemplatesPanel() {
     return () => clearTimeout(timeout)
   }, [successToast])
 
-  const filtered = items.filter((t) =>
+  const orderedItems = [...items].sort((a, b) => {
+    const left = typeof a.sort_order === 'number' ? a.sort_order : a.id
+    const right = typeof b.sort_order === 'number' ? b.sort_order : b.id
+    return left - right || a.id - b.id
+  })
+
+  const filtered = orderedItems.filter((t) =>
     `${t.title} ${t.body}`.toLowerCase().includes(query.toLowerCase())
   )
+
+  const handleMove = async (templateId: number, direction: 'up' | 'down') => {
+    const sorted = [...items].sort((a, b) => {
+      const left = typeof a.sort_order === 'number' ? a.sort_order : a.id
+      const right = typeof b.sort_order === 'number' ? b.sort_order : b.id
+      return left - right || a.id - b.id
+    })
+    const index = sorted.findIndex((t) => t.id === templateId)
+    if (index < 0) return
+    const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (targetIndex < 0 || targetIndex >= sorted.length) return
+
+    const current = sorted[index]
+    const target = sorted[targetIndex]
+    const currentOrder = typeof current.sort_order === 'number' ? current.sort_order : current.id
+    const targetOrder = typeof target.sort_order === 'number' ? target.sort_order : target.id
+
+    setMovingId(templateId)
+    const optimistic = items.map((item) => {
+      if (item.id === current.id) return { ...item, sort_order: targetOrder }
+      if (item.id === target.id) return { ...item, sort_order: currentOrder }
+      return item
+    })
+    setItems(optimistic)
+    if (selected?.id === current.id) setSelected({ ...current, sort_order: targetOrder })
+    if (selected?.id === target.id) setSelected({ ...target, sort_order: currentOrder })
+
+    try {
+      await Promise.all([
+        api.updateTemplate(current.id, { sort_order: targetOrder }),
+        api.updateTemplate(target.id, { sort_order: currentOrder })
+      ])
+      await load()
+      setSuccessToast('Порядок шаблонов обновлён')
+    } catch (error) {
+      console.error('Failed to reorder templates:', error)
+      await load()
+    } finally {
+      setMovingId(null)
+    }
+  }
 
   const handleSave = async () => {
     if (!title.trim() || !body.trim()) return
@@ -189,7 +237,12 @@ export default function TemplatesPanel() {
                   </div>
                 </div>
               ) : (
-                filtered.map((item) => (
+                filtered.map((item) => {
+                  const sorted = orderedItems
+                  const index = sorted.findIndex((t) => t.id === item.id)
+                  const canMoveUp = index > 0
+                  const canMoveDown = index >= 0 && index < sorted.length - 1
+                  return (
                   <button
                     key={item.id}
                     onClick={() => setSelected(item)}
@@ -202,6 +255,34 @@ export default function TemplatesPanel() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="font-medium text-white/90">{item.title}</div>
                       <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            if (!canMoveUp || movingId === item.id) return
+                            void handleMove(item.id, 'up')
+                          }}
+                          disabled={!canMoveUp || movingId === item.id}
+                          className="h-6 w-6 rounded-md border border-white/10 text-white/60 hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Переместить выше"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            if (!canMoveDown || movingId === item.id) return
+                            void handleMove(item.id, 'down')
+                          }}
+                          disabled={!canMoveDown || movingId === item.id}
+                          className="h-6 w-6 rounded-md border border-white/10 text-white/60 hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Переместить ниже"
+                        >
+                          ↓
+                        </button>
                         {hasMedia(item) && (
                           <span className="h-5 w-5 rounded-md bg-emerald-500/15 flex items-center justify-center" title="Есть медиа">
                             <svg className="h-3 w-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -223,7 +304,7 @@ export default function TemplatesPanel() {
                     </div>
                     <div className="text-xs text-white/40 line-clamp-2 mt-1">{item.body}</div>
                   </button>
-                ))
+                )})
               )}
             </div>
           </div>

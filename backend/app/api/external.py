@@ -122,10 +122,11 @@ async def solobot_profile(tg_id: int, admin=Depends(get_current_admin), db: Asyn
     payments_task = solobot.get_payments(tg_id)
     tariffs_task = solobot.get_tariffs(tg_id)
     referrals_task = solobot.get_referrals(tg_id)
+    partner_task = solobot.get_partner_data(tg_id)
     rem_task = remnawave.get_user_by_telegram(tg_id) if remnawave else asyncio.sleep(0, result=None)
 
-    user, keys, payments, tariffs, referrals, rem = await asyncio.gather(
-        user_task, keys_task, payments_task, tariffs_task, referrals_task, rem_task
+    user, keys, payments, tariffs, referrals, partner_data, rem = await asyncio.gather(
+        user_task, keys_task, payments_task, tariffs_task, referrals_task, partner_task, rem_task
     )
 
     enriched_referrals = referrals
@@ -202,6 +203,14 @@ async def solobot_profile(tg_id: int, admin=Depends(get_current_admin), db: Asyn
                 body = digits[1:]
                 return -int(body) if body.isdigit() else None
             return int(digits) if digits.isdigit() else None
+        return None
+
+    def _pick(source: dict | None, *keys: str) -> Any:
+        if not isinstance(source, dict):
+            return None
+        for key in keys:
+            if key in source and source.get(key) is not None:
+                return source.get(key)
         return None
 
     # Pull per-key Remnawave details when key has explicit client UUID
@@ -305,8 +314,53 @@ async def solobot_profile(tg_id: int, admin=Depends(get_current_admin), db: Asyn
     if not source_invite and isinstance(user, dict):
         source_invite = user.get("referrer_code") or user.get("inviter") or user.get("invited_by")
 
+    partner_balance = _pick(user, "partner_balance", "partnerBalance")
+    partner_code = _pick(user, "partner_code", "partnerCode")
+    partner_percent = _pick(user, "partner_percent", "partnerPercent")
+    partner_percent_custom = _pick(user, "partner_percent_custom", "partnerPercentCustom")
+    payout_method = _pick(user, "payout_method", "payoutMethod")
+    card_number = _pick(user, "card_number", "cardNumber")
+
+    if isinstance(partner_data, dict):
+        partner_balance = (
+            partner_data.get("partner_balance")
+            if partner_data.get("partner_balance") is not None
+            else partner_data.get("balance", partner_balance)
+        )
+        partner_code = (
+            partner_data.get("partner_code")
+            if partner_data.get("partner_code") is not None
+            else partner_data.get("code", partner_code)
+        )
+        partner_percent = (
+            partner_data.get("partner_percent")
+            if partner_data.get("partner_percent") is not None
+            else partner_data.get("percent", partner_percent)
+        )
+        payout_method = (
+            partner_data.get("payout_method")
+            if partner_data.get("payout_method") is not None
+            else payout_method
+        )
+        card_number = (
+            partner_data.get("card_number")
+            if partner_data.get("card_number") is not None
+            else card_number
+        )
+        invited = partner_data.get("invited")
+        if isinstance(invited, list) and invited:
+            if not isinstance(enriched_referrals, list) or len(enriched_referrals) == 0:
+                enriched_referrals = invited
+
+    referral_count = len(enriched_referrals) if isinstance(enriched_referrals, list) else 0
+    if referral_count == 0:
+        referral_count = int(
+            _pick(user, "referred_count", "referrals_count", "partner_referrals_count") or 0
+        )
+
     return ExternalProfile(
         user=user,
+        partner=partner_data if isinstance(partner_data, dict) else None,
         keys=enriched_keys if enriched_keys is not None else keys,
         payments=payments,
         ban_status=None,
@@ -318,9 +372,15 @@ async def solobot_profile(tg_id: int, admin=Depends(get_current_admin), db: Asyn
             "trial": user.get("trial") if isinstance(user, dict) else None,
             "total_payments_amount": total_payments_amount,
             "total_payments_count": len(successful_payments),
-            "referral_count": len(enriched_referrals) if isinstance(enriched_referrals, list) else 0,
+            "referral_count": referral_count,
             "source_invite": source_invite or "-",
             "created_at": user.get("created_at") if isinstance(user, dict) else None,
+            "partner_balance": partner_balance,
+            "partner_code": partner_code,
+            "partner_percent": partner_percent,
+            "partner_percent_custom": partner_percent_custom,
+            "payout_method": payout_method,
+            "card_number": card_number,
         },
     )
 

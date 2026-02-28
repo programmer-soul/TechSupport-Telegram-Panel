@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     refresh_token_exp_minutes: int = 60 * 24 * 30
 
     postgres_dsn: str = Field(default="postgresql+asyncpg://postgres:postgres@db:5432/support")
+    db_pool_size: int = 20
+    db_max_overflow: int = 40
+    db_pool_timeout_seconds: int = 30
+    db_pool_recycle_seconds: int = 1800
+    db_statement_timeout_ms: int = 30000
 
     cors_origins: str = "http://localhost:5173"
 

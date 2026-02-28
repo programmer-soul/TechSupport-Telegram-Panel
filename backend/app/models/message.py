@@ -40,3 +40,11 @@ class Message(Base, TimestampMixin):
 
 Index("ix_messages_chat_id", Message.chat_id)
 Index("ix_messages_created_at", Message.created_at)
+Index("ix_messages_chat_created_id", Message.chat_id, Message.created_at.desc(), Message.id.desc())
+Index(
+    "ix_messages_chat_direction_media_group_created",
+    Message.chat_id,
+    Message.direction,
+    Message.telegram_media_group_id,
+    Message.created_at.asc(),
+)

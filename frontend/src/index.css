@@ -177,3 +177,38 @@ body {
 .fade-in {
   animation: fadeInQuick 0.18s ease-out both;
 }
+
+@keyframes chatOpenBar {
+  0% {
+    transform: translateX(-75%);
+    opacity: 0.35;
+  }
+  60% {
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateX(120%);
+    opacity: 0.2;
+  }
+}
+
+.chat-open-loader {
+  position: relative;
+  height: 4px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.chat-open-loader::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 44%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(87, 194, 255, 0.18), rgba(87, 194, 255, 1), rgba(87, 194, 255, 0.18));
+  animation: chatOpenBar 0.55s ease-out infinite;
+  will-change: transform, opacity;
+}

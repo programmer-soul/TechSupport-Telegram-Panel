@@ -28,10 +28,12 @@ class TemplateUpdate(BaseModel):
     body: str | None = None
     attachments: list[AttachmentData] | None = None
     inline_buttons: list[list[InlineButton]] | None = None
+    sort_order: int | None = None
 
 
 class TemplateOut(Timestamped):
     id: int
+    sort_order: int
     title: str
     body: str
     attachments: list[AttachmentData] | None = None

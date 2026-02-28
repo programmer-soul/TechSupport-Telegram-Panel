@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 class ExternalProfile(BaseModel):
     user: dict | None = None
+    partner: dict | None = None
     keys: list | None = None
     payments: list | None = None
     ban_status: dict | None = None

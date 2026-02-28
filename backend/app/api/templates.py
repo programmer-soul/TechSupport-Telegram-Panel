@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_admin
@@ -13,13 +13,16 @@ router = APIRouter(prefix="/templates", tags=["templates"])
 
 @router.get("", response_model=list[TemplateOut])
 async def list_templates(db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)) -> list[Template]:
-    result = await db.execute(select(Template).order_by(Template.id))
+    result = await db.execute(select(Template).order_by(Template.sort_order.asc(), Template.id.asc()))
     return list(result.scalars().all())
 
 
 @router.post("", response_model=TemplateOut)
 async def create_template(payload: TemplateCreate, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)) -> Template:
+    max_order_result = await db.execute(select(func.max(Template.sort_order)))
+    max_order = max_order_result.scalar_one_or_none() or 0
     template = Template(
+        sort_order=int(max_order) + 1,
         title=payload.title,
         body=payload.body,
         attachments=[a.model_dump() for a in payload.attachments] if payload.attachments else None,
@@ -46,6 +49,8 @@ async def update_template(template_id: int, payload: TemplateUpdate, db: AsyncSe
         template.attachments = [a.model_dump() for a in payload.attachments] if payload.attachments else None
     if payload.inline_buttons is not None:
         template.inline_buttons = [[b.model_dump() for b in row] for row in payload.inline_buttons] if payload.inline_buttons else None
+    if payload.sort_order is not None:
+        template.sort_order = payload.sort_order
     await db.commit()
     await db.refresh(template)
     await manager.broadcast("template_updated", {"template": TemplateOut.model_validate(template).model_dump()})

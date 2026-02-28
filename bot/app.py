@@ -8,12 +8,12 @@ from typing import Any
 from datetime import datetime
 
 import httpx
-from aiogram.exceptions import TelegramEntityTooLarge, TelegramBadRequest
+from aiogram.exceptions import TelegramEntityTooLarge, TelegramBadRequest, TelegramForbiddenError
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ContentType, ParseMode, ChatAction
 from aiogram.filters import CommandStart, Command
-from aiogram.types import FSInputFile, Message, InputMediaPhoto, InputMediaVideo, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import FSInputFile, Message, InputMediaPhoto, InputMediaVideo, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
 from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
@@ -95,6 +95,34 @@ async def download_and_convert_heic(file_id: str, original_name: str) -> dict | 
         return None
 
 
+async def download_telegram_file(file_id: str, target_name: str) -> dict | None:
+    """Download Telegram file and save to local uploads. Returns file metadata."""
+    global bot
+    if not bot:
+        return None
+    try:
+        file = await bot.get_file(file_id)
+        if not file.file_path:
+            return None
+        file_bytes = await bot.download_file(file.file_path)
+        if not file_bytes:
+            return None
+        data = file_bytes.read()
+        os.makedirs(UPLOADS_PATH, exist_ok=True)
+        filename = f"{uuid.uuid4().hex}_{target_name}"
+        local_path = os.path.join(UPLOADS_PATH, filename)
+        with open(local_path, "wb") as f:
+            f.write(data)
+        return {
+            "local_path": local_path,
+            "url": f"/static/{filename}",
+            "size": len(data),
+        }
+    except Exception as e:
+        logger.warning(f"Failed to download Telegram file {file_id}: {e}")
+        return None
+
+
 def build_inline_keyboard(buttons_data: list[list[dict]] | None) -> InlineKeyboardMarkup | None:
     """Build InlineKeyboardMarkup from button data."""
     if not buttons_data:
@@ -117,10 +145,31 @@ def plain_text(value: str | None) -> str:
     """Keep text as plain user content, preserving all symbols and line breaks."""
     return value if isinstance(value, str) else ""
 
+
+def classify_forbidden_reason(exc: Exception) -> str:
+    text = str(exc).lower()
+    if "blocked by the user" in text or "bot was blocked" in text:
+        return "blocked"
+    if "can't initiate conversation" in text or "have no rights to send a message" in text:
+        return "stopped_or_never_started"
+    if "user is deactivated" in text:
+        return "deactivated"
+    if "chat not found" in text:
+        return "not_found"
+    return "unknown"
+
+
+def forbidden_response(exc: Exception) -> web.Response:
+    reason = classify_forbidden_reason(exc)
+    return web.json_response({"ok": False, "error": "forbidden", "reason": reason}, status=403)
+
 # Bot will be initialized later when token is available
 bot: Bot | None = None
 TELEGRAM_TOKEN: str = ""
 router = Router()
+MEDIA_GROUP_FLUSH_DELAY_SEC = 0.75
+_media_group_lock = asyncio.Lock()
+_media_group_buffers: dict[str, dict[str, Any]] = {}
 
 
 async def backend_request(method: str, path: str, json_body: dict | None = None) -> Any:
@@ -197,23 +246,8 @@ async def fetch_user_photo_url(user_id: int, username: str | None = None) -> str
 
 @router.message(CommandStart())
 async def handle_start(message: Message) -> None:
-    photo_url = await fetch_user_photo_url(message.from_user.id, message.from_user.username)
-    await backend_request(
-        "POST",
-        "/api/bot/incoming",
-        {
-            "tg_id": message.from_user.id,
-            "tg_username": message.from_user.username,
-            "first_name": message.from_user.first_name,
-            "last_name": message.from_user.last_name,
-            "language_code": message.from_user.language_code,
-            "photo_url": photo_url,
-            "text": message.text or "/start",
-            "type": "text",
-            "telegram_message_id": message.message_id,
-            "attachments": [],
-        },
-    )
+    # /start is not a support ticket message.
+    # Ticket should be created only after the user's first regular message.
     # Fetch greeting from 'messages' settings (same as panel uses)
     messages_settings = await fetch_setting("messages")
     if not messages_settings:
@@ -226,18 +260,7 @@ async def handle_start(message: Message) -> None:
     if not text:
         # If not configured in settings, don't send greeting
         return
-    reply = await message.answer(text, parse_mode=ParseMode.HTML)
-    await backend_request(
-        "POST",
-        "/api/bot/outgoing",
-        {
-            "tg_id": message.from_user.id,
-            "text": text,
-            "type": "text",
-            "telegram_message_id": reply.message_id,
-            "attachments": [],
-        },
-    )
+    await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("link"))
@@ -264,6 +287,38 @@ async def handle_login(message: Message) -> None:
     )
     code = data.get("code")
     await message.answer(f"Код для входа: <code>{code}</code>")
+
+
+@router.my_chat_member()
+async def handle_my_chat_member(update: ChatMemberUpdated) -> None:
+    chat = update.chat
+    if not chat or chat.type != "private":
+        return
+    new_status = getattr(update.new_chat_member, "status", None)
+    old_status = getattr(update.old_chat_member, "status", None)
+    # Telegram can report private-chat delivery loss as:
+    # - kicked: user blocked the bot
+    # - left: user stopped the bot
+    if new_status == "kicked":
+        blocked = True
+        reason = "blocked"
+    elif new_status == "left":
+        blocked = True
+        reason = "stopped_or_never_started"
+    else:
+        blocked = False
+        reason = None
+    # In private chats Telegram does not always distinguish stop vs block reliably.
+    # We still track delivery availability to proactively lock composer in panel.
+    try:
+        await backend_request(
+            "POST",
+            "/api/bot/chat-delivery-state",
+            {"tg_id": chat.id, "blocked": blocked, "reason": reason},
+        )
+    except Exception as e:
+        logger.debug(f"Failed to update chat delivery state: {e}")
+    logger.info(f"my_chat_member chat={chat.id} old={old_status} new={new_status} blocked={blocked}")
 
 
 async def _file_url(file_id: str) -> str | None:
@@ -369,13 +424,35 @@ async def extract_attachment(message: Message) -> tuple[str, dict | None]:
         }
     if message.content_type == ContentType.STICKER and message.sticker:
         sticker = message.sticker
+        is_animated = bool(getattr(sticker, "is_animated", False))
+        is_video = bool(getattr(sticker, "is_video", False))
+        if is_animated:
+            sticker_name = "sticker.tgs"
+            sticker_mime = "application/x-tgsticker"
+        elif is_video:
+            sticker_name = "sticker.webm"
+            sticker_mime = "video/webm"
+        else:
+            sticker_name = "sticker.webp"
+            sticker_mime = "image/webp"
+
+        local = await download_telegram_file(sticker.file_id, sticker_name)
+        preview_local = None
+        if (is_animated or is_video) and getattr(sticker, "thumbnail", None):
+            preview_local = await download_telegram_file(sticker.thumbnail.file_id, "sticker_preview.webp")
         return "sticker", {
             "telegram_file_id": sticker.file_id,
-            "url": await _file_url(sticker.file_id),
-            "name": "sticker.webp",
-            "size": sticker.file_size,
-            "mime": "image/webp",
-            "meta": {"file_unique_id": sticker.file_unique_id},
+            "local_path": (preview_local or local or {}).get("local_path"),
+            "url": (preview_local or local or {}).get("url") or await _file_url(sticker.file_id),
+            "name": "sticker_preview.webp" if preview_local else sticker_name,
+            "size": (preview_local or local or {}).get("size") or sticker.file_size,
+            "mime": "image/webp" if preview_local else sticker_mime,
+            "meta": {
+                "file_unique_id": sticker.file_unique_id,
+                "is_animated": is_animated,
+                "is_video": is_video,
+                "source_mime": sticker_mime,
+            },
         }
     return "text", None
 
@@ -386,6 +463,10 @@ async def handle_any(message: Message) -> None:
         return
     photo_url = await fetch_user_photo_url(message.from_user.id, message.from_user.username)
     msg_type, attachment = await extract_attachment(message)
+    if attachment is not None:
+        meta = dict(attachment.get("meta") or {})
+        meta["telegram_message_id"] = message.message_id
+        attachment["meta"] = meta
     
     # Extract forward info
     forward_from_name = None
@@ -424,12 +505,87 @@ async def handle_any(message: Message) -> None:
         "forward_from_username": forward_from_username,
         "forward_date": forward_date,
     }
-    resp = await backend_request("POST", "/api/bot/incoming", payload)
+    async def send_incoming(incoming_payload: dict[str, Any]) -> Any:
+        return await backend_request("POST", "/api/bot/incoming", incoming_payload)
+
+    media_group_id = message.media_group_id
+    if media_group_id:
+        async def flush_media_group(group_key: str) -> None:
+            await asyncio.sleep(MEDIA_GROUP_FLUSH_DELAY_SEC)
+            async with _media_group_lock:
+                bucket = _media_group_buffers.pop(group_key, None)
+            if not bucket:
+                return
+            items = bucket.get("items", [])
+            if not items:
+                return
+            base = dict(items[0])
+            # Merge all attachments from the album into one payload.
+            merged_attachments: list[dict[str, Any]] = []
+            for item in items:
+                for att in item.get("attachments", []) or []:
+                    if att:
+                        merged_attachments.append(att)
+            # Keep caption/text from the first item that has it.
+            merged_text = next((it.get("text") for it in items if it.get("text")), None)
+            base["text"] = merged_text
+            base["attachments"] = merged_attachments
+            # Stable representative message id for the grouped payload.
+            msg_ids = [it.get("telegram_message_id") for it in items if it.get("telegram_message_id")]
+            base["telegram_message_id"] = min(msg_ids) if msg_ids else base.get("telegram_message_id")
+            try:
+                resp_local = await send_incoming(base)
+            except Exception:
+                return
+            if resp_local and resp_local.get("send_autoreply"):
+                messages_settings = await fetch_setting("messages") or {}
+                autoreply_enabled = messages_settings.get("autoreply_enabled", True)
+                autoreply_text = messages_settings.get("autoreply")
+                delete_after = messages_settings.get("autoreply_delete_sec")
+
+                if not autoreply_enabled:
+                    return
+                if not autoreply_text:
+                    autoreply_text = DEFAULT_AUTOREPLY
+                if delete_after is None:
+                    delete_after = DEFAULT_AUTOREPLY_DELETE_AFTER
+
+                safe_autoreply = plain_text(str(autoreply_text))
+                try:
+                    reply = await message.answer(html.escape(safe_autoreply))
+                except TelegramBadRequest:
+                    reply = await message.answer(safe_autoreply)
+
+                async def delete_later_group() -> None:
+                    try:
+                        delay = int(delete_after) if str(delete_after).isdigit() else DEFAULT_AUTOREPLY_DELETE_AFTER
+                    except Exception:
+                        delay = DEFAULT_AUTOREPLY_DELETE_AFTER
+                    if delay <= 0:
+                        return
+                    await asyncio.sleep(delay)
+                    try:
+                        await bot.delete_message(chat_id=message.chat.id, message_id=reply.message_id)
+                    except Exception:
+                        pass
+
+                asyncio.create_task(delete_later_group())
+
+        async with _media_group_lock:
+            bucket = _media_group_buffers.get(media_group_id)
+            if not bucket:
+                bucket = {"items": [], "task": None}
+                _media_group_buffers[media_group_id] = bucket
+            bucket["items"].append(payload)
+            if not bucket.get("task"):
+                bucket["task"] = asyncio.create_task(flush_media_group(media_group_id))
+        return
+
+    resp = await send_incoming(payload)
     if resp and resp.get("send_autoreply"):
         messages_settings = await fetch_setting("messages") or {}
         autoreply_enabled = messages_settings.get("autoreply_enabled", True)
         autoreply_text = messages_settings.get("autoreply")
-        send_delay = messages_settings.get("autoreply_delay_sec", 0)
         delete_after = messages_settings.get("autoreply_delete_sec")
 
         if not autoreply_enabled:
@@ -437,31 +593,14 @@ async def handle_any(message: Message) -> None:
 
         if not autoreply_text:
             autoreply_text = DEFAULT_AUTOREPLY
-        try:
-            delay_before_send = int(send_delay) if str(send_delay).isdigit() else 0
-        except Exception:
-            delay_before_send = 0
         if delete_after is None:
             delete_after = DEFAULT_AUTOREPLY_DELETE_AFTER
 
-        if delay_before_send > 0:
-            await asyncio.sleep(delay_before_send)
         safe_autoreply = plain_text(str(autoreply_text))
         try:
             reply = await message.answer(html.escape(safe_autoreply))
         except TelegramBadRequest:
             reply = await message.answer(safe_autoreply)
-        await backend_request(
-            "POST",
-            "/api/bot/outgoing",
-            {
-                "tg_id": message.from_user.id,
-                "text": safe_autoreply,
-                "type": "text",
-                "telegram_message_id": reply.message_id,
-                "attachments": [],
-            },
-        )
 
         async def delete_later() -> None:
             try:
@@ -502,8 +641,12 @@ async def handle_internal_delete(request: web.Request) -> web.Response:
     telegram_message_id = int(data.get("telegram_message_id"))
     try:
         await bot.delete_message(chat_id=tg_id, message_id=telegram_message_id)
-    except Exception:
-        pass
+    except TelegramBadRequest as e:
+        return web.json_response({"ok": False, "error": "bad_request", "detail": str(e)}, status=400)
+    except TelegramForbiddenError as e:
+        return web.json_response({"ok": False, "error": "forbidden", "detail": str(e)}, status=403)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": "delete_failed", "detail": str(e)}, status=500)
     return web.json_response({"ok": True})
 
 
@@ -522,8 +665,9 @@ async def handle_internal_send(request: web.Request) -> web.Response:
     attachments = data.get("attachments", [])
     inline_buttons = data.get("inline_buttons")
     
-    # Track sent message ID
+    # Track sent message IDs (for media groups / multi-attachments)
     sent_telegram_message_id = None
+    sent_telegram_message_ids: list[int] = []
     
     # Build inline keyboard if buttons provided
     reply_markup = build_inline_keyboard(inline_buttons)
@@ -611,7 +755,12 @@ async def handle_internal_send(request: web.Request) -> web.Response:
                     break
             if all_media and media:
                 try:
-                    await bot.send_media_group(tg_id, media=media, reply_to_message_id=reply_to)
+                    sent_group = await bot.send_media_group(tg_id, media=media, reply_to_message_id=reply_to)
+                    sent_telegram_message_ids = [m.message_id for m in sent_group if getattr(m, "message_id", None)]
+                    if sent_telegram_message_ids:
+                        sent_telegram_message_id = sent_telegram_message_ids[0]
+                except TelegramForbiddenError as e:
+                    return forbidden_response(e)
                 except TelegramEntityTooLarge:
                     await send_system_to_panel(
                         tg_id,
@@ -634,18 +783,24 @@ async def handle_internal_send(request: web.Request) -> web.Response:
                     markup = reply_markup if is_last else None
                     try:
                         if kind == "photo":
-                            await bot.send_photo(tg_id, photo=file_input, caption=caption, reply_to_message_id=reply_to, reply_markup=markup)
+                            sent_msg = await bot.send_photo(tg_id, photo=file_input, caption=caption, reply_to_message_id=reply_to, reply_markup=markup)
                         elif kind == "video":
-                            await bot.send_video(tg_id, video=file_input, caption=caption, reply_to_message_id=reply_to, reply_markup=markup)
+                            sent_msg = await bot.send_video(tg_id, video=file_input, caption=caption, reply_to_message_id=reply_to, reply_markup=markup)
                         elif kind == "audio":
-                            await bot.send_audio(tg_id, audio=file_input, caption=caption, reply_to_message_id=reply_to, reply_markup=markup)
+                            sent_msg = await bot.send_audio(tg_id, audio=file_input, caption=caption, reply_to_message_id=reply_to, reply_markup=markup)
                         else:
-                            await bot.send_document(tg_id, document=file_input, caption=caption, reply_to_message_id=reply_to, reply_markup=markup)
+                            sent_msg = await bot.send_document(tg_id, document=file_input, caption=caption, reply_to_message_id=reply_to, reply_markup=markup)
+                        if sent_msg and getattr(sent_msg, "message_id", None):
+                            sent_telegram_message_ids.append(sent_msg.message_id)
+                    except TelegramForbiddenError as e:
+                        return forbidden_response(e)
                     except TelegramEntityTooLarge:
                         await send_system_to_panel(
                             tg_id,
                             f"Файл слишком большой для Telegram: {att.get('name') or 'file'}",
                         )
+                if sent_telegram_message_ids:
+                    sent_telegram_message_id = sent_telegram_message_ids[0]
         else:
             attachment = attachments[0]
             if not ensure_size(attachment):
@@ -657,7 +812,7 @@ async def handle_internal_send(request: web.Request) -> web.Response:
             file_input = to_file_input(attachment)
             
             async def send_single_attachment(markup, caption_override=None):
-                cap = caption_override if caption_override is not None else (html.escape(text) if text else None)
+                cap = caption_override if caption_override is not None else (text if text else None)
                 if msg_type == "photo":
                     return await bot.send_photo(tg_id, photo=file_input, caption=cap, reply_to_message_id=reply_to, reply_markup=markup)
                 elif msg_type == "video":
@@ -678,6 +833,8 @@ async def handle_internal_send(request: web.Request) -> web.Response:
             try:
                 sent_msg = await send_single_attachment(reply_markup)
                 sent_telegram_message_id = sent_msg.message_id
+            except TelegramForbiddenError as e:
+                return forbidden_response(e)
             except TelegramBadRequest as e:
                 if "can't parse entities" in str(e).lower():
                     logger.warning(f"HTML parse error in caption, retrying with escaped text: {e}")
@@ -699,8 +856,10 @@ async def handle_internal_send(request: web.Request) -> web.Response:
                 return web.json_response({"ok": False, "error": "too_large"}, status=413)
     else:
         try:
-            sent_msg = await bot.send_message(tg_id, html.escape(text), reply_to_message_id=reply_to, reply_markup=reply_markup)
+            sent_msg = await bot.send_message(tg_id, text, reply_to_message_id=reply_to, reply_markup=reply_markup)
             sent_telegram_message_id = sent_msg.message_id
+        except TelegramForbiddenError as e:
+            return forbidden_response(e)
         except TelegramBadRequest as e:
             if "can't parse entities" in str(e).lower():
                 logger.warning(f"HTML parse error, retrying with escaped text: {e}")
@@ -715,7 +874,13 @@ async def handle_internal_send(request: web.Request) -> web.Response:
             else:
                 raise
 
-    return web.json_response({"ok": True, "telegram_message_id": sent_telegram_message_id})
+    return web.json_response(
+        {
+            "ok": True,
+            "telegram_message_id": sent_telegram_message_id,
+            "telegram_message_ids": sent_telegram_message_ids,
+        }
+    )
 
 
 async def wait_for_token() -> str:
@@ -746,10 +911,17 @@ async def on_startup(app: web.Application) -> None:
     if not bot:
         logger.warning("Bot not initialized yet, skipping webhook/polling setup")
         return
+    allowed_updates = app["dispatcher"].resolve_used_update_types()
     if WEBHOOK_URL:
-        await bot.set_webhook(f"{WEBHOOK_URL}{WEBHOOK_PATH}")
+        await bot.set_webhook(
+            f"{WEBHOOK_URL}{WEBHOOK_PATH}",
+            allowed_updates=allowed_updates,
+            drop_pending_updates=False,
+        )
     else:
-        app["polling_task"] = asyncio.create_task(app["dispatcher"].start_polling(bot))
+        app["polling_task"] = asyncio.create_task(
+            app["dispatcher"].start_polling(bot, allowed_updates=allowed_updates)
+        )
 
 
 async def on_shutdown(app: web.Application) -> None:
@@ -811,15 +983,20 @@ async def run_bot():
     logger.info(f"HTTP server started on port {PORT}")
     
     # Setup webhook or polling
+    allowed_updates = app["dispatcher"].resolve_used_update_types()
     if WEBHOOK_URL:
-        await bot.set_webhook(f"{WEBHOOK_URL}{WEBHOOK_PATH}")
-        logger.info(f"Webhook set to {WEBHOOK_URL}{WEBHOOK_PATH}")
+        await bot.set_webhook(
+            f"{WEBHOOK_URL}{WEBHOOK_PATH}",
+            allowed_updates=allowed_updates,
+            drop_pending_updates=False,
+        )
+        logger.info(f"Webhook set to {WEBHOOK_URL}{WEBHOOK_PATH}, allowed_updates={allowed_updates}")
         # Keep running
         while True:
             await asyncio.sleep(3600)
     else:
         logger.info("Starting polling...")
-        await app["dispatcher"].start_polling(bot)
+        await app["dispatcher"].start_polling(bot, allowed_updates=allowed_updates)
 
 
 if __name__ == "__main__":

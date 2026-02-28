@@ -10,6 +10,7 @@ class Template(Base, TimestampMixin):
     __tablename__ = "templates"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sort_order: Mapped[int] = mapped_column(default=0, nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(128))
     body: Mapped[str] = mapped_column(Text)
     attachments: Mapped[list | None] = mapped_column(JSONB, nullable=True)

@@ -14,6 +14,11 @@ export type Chat = {
   created_at?: string | null
   last_message_at?: string | null
   last_message_preview?: string | null
+  bot_blocked?: boolean
+  bot_blocked_reason?: string | null
+  bot_blocked_at?: string | null
+  admin_blocked?: boolean
+  admin_blocked_at?: string | null
 }
 
 export type Message = {
@@ -23,6 +28,7 @@ export type Message = {
   type: string
   text?: string | null
   telegram_message_id?: number | null
+  telegram_media_group_id?: string | null
   reply_to_telegram_message_id?: number | null
   reply_to_message_id?: string | null
   is_edited?: boolean | null
@@ -39,6 +45,7 @@ export type Message = {
 
 export type ExternalProfile = {
   user?: Record<string, unknown> | null
+  partner?: Record<string, unknown> | null
   keys?: any[] | null
   payments?: any[] | null
   ban_status?: any | null
@@ -54,6 +61,7 @@ export type AttachmentData = { url?: string; local_path?: string; mime?: string;
 
 export type Template = { 
   id: number
+  sort_order?: number
   title: string
   body: string
   attachments?: AttachmentData[] | null
@@ -86,6 +94,14 @@ export type PaginatedResponse<T> = {
   items: T[]
   nextCursor: string | null
   hasMore: boolean
+}
+
+export type ChatCounts = {
+  new: number
+  active: number
+  closed: number
+  transferred: number
+  unanswered: number
 }
 
 // Encode cursor for pagination (matches backend format)
@@ -210,6 +226,7 @@ export const api = {
     return { items, nextCursor, hasMore: items.length === limit }
   },
   getChat: (chatId: string) => request<Chat>(`/api/chats/${chatId}`),
+  getChatCounts: () => request<ChatCounts>('/api/chats/counts'),
   // Paginated version - returns items with cursor info
   getMessages: async (chatId: string, cursor?: string, limit = 50): Promise<PaginatedResponse<Message>> => {
     const cursorParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
@@ -226,6 +243,8 @@ export const api = {
   deleteMessage: (chatId: string, messageId: string) =>
     request(`/api/chats/${chatId}/messages/${messageId}`, { method: 'DELETE' }),
   closeChat: (chatId: string) => request<Chat>(`/api/chats/${chatId}/close`, { method: 'POST', body: JSON.stringify({}) }),
+  blockChat: (chatId: string, blocked: boolean) =>
+    request<Chat>(`/api/chats/${chatId}/block`, { method: 'POST', body: JSON.stringify({ blocked }) }),
   deleteChat: (chatId: string) => request(`/api/chats/${chatId}`, { method: 'DELETE' }),
   escalateChat: (chatId: string) => request<Chat>(`/api/chats/${chatId}/escalate`, { method: 'POST', body: JSON.stringify({}) }),
   assignChat: (chatId: string, userId?: string) =>

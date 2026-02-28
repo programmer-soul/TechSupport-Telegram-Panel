@@ -208,7 +208,6 @@ export default function SettingsPanel({ onBrandingChange, onPanelModeChange, onS
   const [greetingEnabled, setGreetingEnabled] = useState(true)
   const [autoreply, setAutoreply] = useState('')
   const [autoreplyEnabled, setAutoreplyEnabled] = useState(true)
-  const [autoreplyDelaySec, setAutoreplyDelaySec] = useState('0')
   const [autoreplyDeleteSec, setAutoreplyDeleteSec] = useState('0')
 
   // Remnawave
@@ -269,7 +268,6 @@ export default function SettingsPanel({ onBrandingChange, onPanelModeChange, onS
         setGreetingEnabled(msg.greeting_enabled !== false)
         setAutoreply(msg.autoreply as string || '')
         setAutoreplyEnabled(msg.autoreply_enabled !== false)
-        setAutoreplyDelaySec(String(msg.autoreply_delay_sec || '0'))
         setAutoreplyDeleteSec(String(msg.autoreply_delete_sec || '0'))
       }
 
@@ -310,7 +308,6 @@ export default function SettingsPanel({ onBrandingChange, onPanelModeChange, onS
             greeting_enabled: greetingEnabled,
             autoreply,
             autoreply_enabled: autoreplyEnabled,
-            autoreply_delay_sec: parseInt(autoreplyDelaySec) || 0,
             autoreply_delete_sec: parseInt(autoreplyDeleteSec) || 0
           }
         }),
@@ -511,14 +508,6 @@ export default function SettingsPanel({ onBrandingChange, onPanelModeChange, onS
                 placeholder="Спасибо за обращение! Мы ответим в ближайшее время."
                 hint="Отправляется автоматически только на сообщения клиента"
                 rows={2}
-                disabled={saving || !autoreplyEnabled}
-              />
-              <Input
-                label="Задержка автоответа (сек)"
-                value={autoreplyDelaySec}
-                onChange={setAutoreplyDelaySec}
-                placeholder="0"
-                hint="0 = отправлять сразу"
                 disabled={saving || !autoreplyEnabled}
               />
               <Input

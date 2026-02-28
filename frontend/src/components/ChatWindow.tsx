@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { api, Chat, Message, InlineButton } from '../lib/api'
 
@@ -44,7 +44,7 @@ function AudioPlayer({ src, isVoice, name }: { src: string; isVoice: boolean; na
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0
 
   return (
-    <div className="flex items-center gap-2 bg-white/5 rounded-xl px-3 py-2 min-w-[180px] max-w-[240px]">
+    <div className="flex w-[220px] max-w-full items-center gap-2 overflow-hidden rounded-xl bg-white/5 px-3 py-2 sm:w-[250px]">
       <audio
         ref={audioRef}
         src={src}
@@ -72,9 +72,9 @@ function AudioPlayer({ src, isVoice, name }: { src: string; isVoice: boolean; na
           </svg>
         )}
       </button>
-      <div className="flex-1 flex flex-col gap-1">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div
-          className="h-1.5 bg-white/10 rounded-full cursor-pointer overflow-hidden"
+          className="h-1.5 w-full cursor-pointer overflow-hidden rounded-full bg-white/10"
           onClick={handleSeek}
         >
           <div
@@ -82,9 +82,9 @@ function AudioPlayer({ src, isVoice, name }: { src: string; isVoice: boolean; na
             style={{ width: `${progress}%` }}
           />
         </div>
-        <div className="flex justify-between text-[9px] text-white/50">
-          <span>{formatTime(currentTime)}</span>
-          <span>{formatTime(duration)}</span>
+        <div className="flex justify-between text-[10px] text-white/55 tabular-nums">
+          <span className="whitespace-nowrap">{formatTime(currentTime)}</span>
+          <span className="whitespace-nowrap">{formatTime(duration)}</span>
         </div>
       </div>
       <a
@@ -112,13 +112,14 @@ export default function ChatWindow({
   onShowProfile,
   onChatUpdated,
   userRole,
+  messagesLoading = false,
   hasMoreMessages = false,
   loadingMoreMessages = false,
   onLoadMoreMessages
 }: {
   chat?: Chat
   messages: Message[]
-  onMessageSent: () => void
+  onMessageSent: (sent?: Message) => void
   onMessageDeleted?: () => void
   highlight?: string
   templates?: { id: number; title: string; body: string; attachments?: any[] | null; inline_buttons?: { text: string; url: string }[][] | null }[]
@@ -126,6 +127,7 @@ export default function ChatWindow({
   onShowProfile?: () => void
   onChatUpdated?: (patch: Partial<Chat>) => void
   userRole?: 'administrator' | 'moderator' | null
+  messagesLoading?: boolean
   hasMoreMessages?: boolean
   loadingMoreMessages?: boolean
   onLoadMoreMessages?: () => void
@@ -166,8 +168,12 @@ export default function ChatWindow({
   const [deleteMode, setDeleteMode] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<Message | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [failedStickers, setFailedStickers] = useState<Set<string>>(new Set())
   const [isDragging, setIsDragging] = useState(false)
+  const [showOpenLoader, setShowOpenLoader] = useState(false)
+  const [holdOpenLoader, setHoldOpenLoader] = useState(false)
+  const [contentReady, setContentReady] = useState(true)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const [stickToBottom, setStickToBottom] = useState(true)
@@ -178,12 +184,38 @@ export default function ChatWindow({
   const initialLoadRef = useRef(true)
   const needsScrollRef = useRef(false)
   const keepScrollingUntilRef = useRef<number>(0)
+  const bottomSnapRafRef = useRef<number | null>(null)
+  const suppressEnterAnimUntilRef = useRef<number>(0)
   const lastCountRef = useRef(0)
   const lastChatRef = useRef<string | undefined>(undefined)
+  const contentShownForChatRef = useRef<string | undefined>(undefined)
+  const sawMessagesLoadingForChatRef = useRef(false)
+  const loaderHoldTimerRef = useRef<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const topLoaderRef = useRef<HTMLDivElement>(null)
   const prevScrollHeightRef = useRef<number>(0)
   const noteBlockRef = useRef<HTMLDivElement>(null)
+  const deliveryBlocked = Boolean(chat?.bot_blocked || chat?.admin_blocked)
+  const blockedReason = String(chat?.bot_blocked_reason || '').toLowerCase()
+  const blockedText =
+    chat?.admin_blocked
+      ? 'Клиент заблокирован администратором'
+      : blockedReason === 'blocked'
+        ? 'Пользователь заблокировал бота'
+        : blockedReason === 'stopped_or_never_started'
+          ? 'Пользователь остановил бота'
+          : blockedReason === 'deactivated'
+            ? 'Аккаунт пользователя деактивирован'
+            : 'Пользователь недоступен для сообщений'
+  const isInitialMessagesLoad = Boolean(chat?.id && messagesLoading && contentShownForChatRef.current !== chat.id)
+  const hasShownCurrentChat = Boolean(chat?.id && contentShownForChatRef.current === chat.id)
+  const openingPhase = Boolean(chat && !hasShownCurrentChat && (!contentReady || showOpenLoader || isInitialMessagesLoad || holdOpenLoader))
+  const getOpenLoaderDelay = () => {
+    if (typeof window === 'undefined') return 220
+    const mobileViewport = window.matchMedia('(max-width: 768px)').matches
+    const coarsePointer = window.matchMedia('(pointer: coarse)').matches
+    return mobileViewport || coarsePointer ? 360 : 220
+  }
 
   // Load more messages when scrolling to top
   useEffect(() => {
@@ -226,14 +258,23 @@ export default function ChatWindow({
     }
   }, [messages.length, loadingMoreMessages])
 
-  // Helper to scroll to bottom
+  // Keep bottom anchored without multiple hard jumps when media loads in bursts.
+  const scheduleBottomSnap = () => {
+    if (bottomSnapRafRef.current) return
+    bottomSnapRafRef.current = requestAnimationFrame(() => {
+      bottomSnapRafRef.current = null
+      const el = listRef.current
+      if (!el) return
+      if (!stickToBottom && Date.now() >= keepScrollingUntilRef.current) return
+      el.scrollTop = el.scrollHeight
+    })
+  }
+
+  // Helper for media callbacks
   const scrollToBottom = () => {
     const el = listRef.current
-    if (el) {
-      requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight
-      })
-    }
+    if (!el) return
+    scheduleBottomSnap()
   }
   const photoRef = useRef<HTMLInputElement>(null)
   const emojiRef = useRef<HTMLDivElement>(null)
@@ -248,6 +289,25 @@ export default function ChatWindow({
   ]
 
   useEffect(() => {
+    return () => {
+      if (bottomSnapRafRef.current) {
+        cancelAnimationFrame(bottomSnapRafRef.current)
+        bottomSnapRafRef.current = null
+      }
+      if (loaderHoldTimerRef.current) {
+        window.clearTimeout(loaderHoldTimerRef.current)
+        loaderHoldTimerRef.current = null
+      }
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!chat?.id) {
+      setContentReady(true)
+      return
+    }
+    setContentReady(false)
+    contentShownForChatRef.current = undefined
     setText('')
     setReplyTo(null)
     setPendingAttachments([])
@@ -261,7 +321,229 @@ export default function ChatWindow({
     setDeleteMode(false)
     setConfirmDelete(null)
     setFailedStickers(new Set())
+    suppressEnterAnimUntilRef.current = Date.now() + 1200
+    sawMessagesLoadingForChatRef.current = false
+    setHoldOpenLoader(true)
   }, [chat?.id])
+
+  useEffect(() => {
+    if (!chat?.id) return
+    if (messagesLoading) {
+      sawMessagesLoadingForChatRef.current = true
+    }
+  }, [chat?.id, messagesLoading])
+
+  useEffect(() => {
+    if (!chat?.id) return
+    if (messagesLoading) return
+    if (messages.length > 0) {
+      // Allow top IntersectionObserver pagination after initial batch is rendered.
+      initialLoadRef.current = false
+    }
+  }, [chat?.id, messagesLoading, messages.length])
+
+  useEffect(() => {
+    if (!chat?.id) {
+      setShowOpenLoader(false)
+      return
+    }
+    setShowOpenLoader(true)
+    const t = window.setTimeout(() => {
+      setShowOpenLoader(false)
+    }, getOpenLoaderDelay())
+    return () => window.clearTimeout(t)
+  }, [chat?.id])
+
+  useEffect(() => {
+    if (loaderHoldTimerRef.current) {
+      window.clearTimeout(loaderHoldTimerRef.current)
+      loaderHoldTimerRef.current = null
+    }
+    if (!chat?.id) {
+      setHoldOpenLoader(false)
+      return
+    }
+    // Keep hold only during initial open of a chat.
+    // Subsequent background refreshes (e.g. after sending) must not hide the chat.
+    if (!contentReady || isInitialMessagesLoad || showOpenLoader) {
+      setHoldOpenLoader(true)
+      return
+    }
+    // Keep loader visible for a short final beat after content is ready,
+    // so transition feels smooth and avoids post-loader flicker.
+    loaderHoldTimerRef.current = window.setTimeout(() => {
+      // Final snap before reveal to hide residual post-loader drift.
+      scheduleBottomSnap()
+      setHoldOpenLoader(false)
+      loaderHoldTimerRef.current = null
+    }, 320)
+    return () => {
+      if (loaderHoldTimerRef.current) {
+        window.clearTimeout(loaderHoldTimerRef.current)
+        loaderHoldTimerRef.current = null
+      }
+    }
+  }, [chat?.id, contentReady, isInitialMessagesLoad, showOpenLoader])
+
+  useEffect(() => {
+    if (!chat?.id) {
+      setContentReady(true)
+      return
+    }
+    // Do not reveal content before we have observed at least one real loading
+    // cycle for this chat; otherwise we can briefly show an empty panel and
+    // then repaint, which looks like flicker.
+    if (!sawMessagesLoadingForChatRef.current && messages.length === 0) return
+    if (messagesLoading) return
+    // Already properly revealed for this chat (with real messages) — don't
+    // interfere with subsequent incoming WS messages or re-renders.
+    if (contentShownForChatRef.current === chat.id) return
+    const el = listRef.current
+    if (!el) {
+      setContentReady(true)
+      return
+    }
+    // If messages haven't arrived yet, wait for them (avoids top→bottom flicker
+    // when messagesLoading flips false before the message list is populated).
+    // Do NOT mark contentShownForChatRef here so the effect re-runs once
+    // messages do arrive and can snap properly to the bottom.
+    if (messages.length === 0) {
+      const t = window.setTimeout(() => setContentReady(true), 350)
+      return () => window.clearTimeout(t)
+    }
+
+    // Keep content hidden until the scroll height has been stable for
+    // STABLE_MS. Poll el.scrollHeight directly so we don't depend on
+    // firstElementChild (which is the sticky "Add comment" button, not the
+    // messages wrapper, causing ResizeObserver to miss image-load events).
+    el.scrollTop = el.scrollHeight
+    let lastHeight = el.scrollHeight
+    let stableMs = 0
+    const POLL_MS = 50
+    const STABLE_MS = 360
+    const MAX_HIDDEN_MS = 2600
+
+    const revealContent = () => {
+      clearInterval(pollInterval)
+      window.clearTimeout(maxTimer)
+      contentShownForChatRef.current = chat.id
+      el.scrollTop = el.scrollHeight
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setContentReady(true)
+        })
+      })
+    }
+
+    const show = () => {
+      const images = Array.from(el.querySelectorAll('img[data-chat-media="1"]')) as HTMLImageElement[]
+      const videos = Array.from(el.querySelectorAll('video[data-chat-media="1"]')) as HTMLVideoElement[]
+      const pendingImages = images.filter((img) => !img.complete)
+      const pendingVideos = videos.filter((video) => video.readyState < 1)
+      const pendingTotal = pendingImages.length + pendingVideos.length
+      if (pendingTotal === 0) {
+        revealContent()
+        return
+      }
+
+      let resolved = 0
+      let finished = false
+      const cleanups: Array<() => void> = []
+      const done = () => {
+        if (finished) return
+        resolved += 1
+        if (resolved >= pendingTotal) {
+          finished = true
+          cleanups.forEach((fn) => fn())
+          revealContent()
+        }
+      }
+
+      for (const img of pendingImages) {
+        const onLoad = () => done()
+        const onError = () => done()
+        img.addEventListener('load', onLoad, { once: true })
+        img.addEventListener('error', onError, { once: true })
+        cleanups.push(() => {
+          img.removeEventListener('load', onLoad)
+          img.removeEventListener('error', onError)
+        })
+      }
+
+      for (const video of pendingVideos) {
+        const onMeta = () => done()
+        const onError = () => done()
+        video.addEventListener('loadedmetadata', onMeta, { once: true })
+        video.addEventListener('error', onError, { once: true })
+        cleanups.push(() => {
+          video.removeEventListener('loadedmetadata', onMeta)
+          video.removeEventListener('error', onError)
+        })
+      }
+
+      const fallback = window.setTimeout(() => {
+        if (finished) return
+        finished = true
+        cleanups.forEach((fn) => fn())
+        revealContent()
+      }, 1200)
+      cleanups.push(() => window.clearTimeout(fallback))
+    }
+
+    const pollInterval = setInterval(() => {
+      const h = el.scrollHeight
+      if (h !== lastHeight) {
+        lastHeight = h
+        stableMs = 0
+        el.scrollTop = el.scrollHeight
+      } else {
+        stableMs += POLL_MS
+        if (stableMs >= STABLE_MS) show()
+      }
+    }, POLL_MS)
+
+    const maxTimer = window.setTimeout(show, MAX_HIDDEN_MS)
+
+    return () => {
+      clearInterval(pollInterval)
+      window.clearTimeout(maxTimer)
+    }
+  }, [chat?.id, messagesLoading, messages.length])
+
+  useEffect(() => {
+    // Prevent entry animation flicker right after initial chat loading finishes.
+    if (chat && !showOpenLoader && !messagesLoading && !holdOpenLoader) {
+      suppressEnterAnimUntilRef.current = Date.now() + 900
+    }
+  }, [chat?.id, showOpenLoader, messagesLoading, holdOpenLoader])
+
+  useEffect(() => {
+    if (!openingPhase) return
+    // While loading a chat, keep viewport pinned to the latest messages.
+    scheduleBottomSnap()
+    const t = window.setInterval(() => {
+      scheduleBottomSnap()
+    }, 60)
+    return () => window.clearInterval(t)
+  }, [openingPhase])
+
+  useEffect(() => {
+    if (!chat || openingPhase) return
+    // Final stabilization after loader is gone (late media/layout updates).
+    scheduleBottomSnap()
+    const t = window.setTimeout(() => {
+      scheduleBottomSnap()
+    }, 180)
+    return () => window.clearTimeout(t)
+  }, [chat?.id, openingPhase, messages.length])
+
+  useEffect(() => {
+    if (!chat || deliveryBlocked) return
+    const timer = window.setTimeout(() => {
+      inputRef.current?.focus()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [chat?.id, deliveryBlocked])
 
   useEffect(() => {
     if (!chat) return
@@ -295,23 +577,25 @@ export default function ChatWindow({
     return () => ro.disconnect()
   }, [])
 
-  // Watch for content size changes and keep scrolling to bottom during initial load
+  // Watch content size changes and keep bottom anchored while user is at bottom
+  // (and for a short warm-up window after opening chat).
+  // Poll el.scrollHeight instead of using ResizeObserver on firstElementChild,
+  // because the first child is the sticky note/comment button, not the messages
+  // wrapper — so ResizeObserver would miss image-load layout changes.
   useEffect(() => {
     const el = listRef.current
     if (!el) return
-    const scrollContent = el.firstElementChild as HTMLElement | null
-    if (!scrollContent) return
-    let lastHeight = scrollContent.scrollHeight
-    const ro = new ResizeObserver(() => {
-      const newHeight = scrollContent.scrollHeight
-      if (newHeight !== lastHeight && Date.now() < keepScrollingUntilRef.current) {
+    let lastHeight = el.scrollHeight
+    const id = setInterval(() => {
+      const newHeight = el.scrollHeight
+      if (newHeight !== lastHeight && (stickToBottom || Date.now() < keepScrollingUntilRef.current)) {
         lastHeight = newHeight
         el.scrollTop = el.scrollHeight
+        scheduleBottomSnap()
       }
-    })
-    ro.observe(scrollContent)
-    return () => ro.disconnect()
-  }, [chat?.id])
+    }, 50)
+    return () => clearInterval(id)
+  }, [chat?.id, stickToBottom])
 
   useEffect(() => {
     if (!emojiOpen) return
@@ -373,6 +657,12 @@ export default function ChatWindow({
   }, [lightboxSrc])
 
   useEffect(() => {
+    if (!deleteError) return
+    const t = window.setTimeout(() => setDeleteError(null), 3500)
+    return () => window.clearTimeout(t)
+  }, [deleteError])
+
+  useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         if (confirmDelete) setConfirmDelete(null)
@@ -402,7 +692,7 @@ export default function ChatWindow({
     inputRef.current.style.height = `${next}px`
   }, [text])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = listRef.current
     if (!el) return
     const chatId = chat?.id
@@ -412,33 +702,15 @@ export default function ChatWindow({
 
     if (chatChanged) {
       lastChatRef.current = chatId
-      lastCountRef.current = 0
-      needsScrollRef.current = true
-      initialLoadRef.current = true
-      keepScrollingUntilRef.current = 0
+      lastCountRef.current = count
+      el.scrollTop = el.scrollHeight
       return
     }
 
     lastCountRef.current = count
-
-    // Scroll to bottom when messages first load after chat change
-    if (needsScrollRef.current && count > 0) {
-      needsScrollRef.current = false
-      initialLoadRef.current = false
-      // Keep auto-scrolling to bottom for 2 seconds to handle media loading
-      keepScrollingUntilRef.current = Date.now() + 2000
-      // Immediate scroll
-      requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight
-      })
-      return
-    }
-
     if (!stickToBottom || !countChanged) return
-    const newest = messages[0]
-    if (newest && newest.direction !== 'IN' && newest.direction !== 'OUT') return
     requestAnimationFrame(() => {
-      el.scrollTo({ top: el.scrollHeight, behavior: smoothScrollRef.current ? 'smooth' : 'auto' })
+      el.scrollTop = el.scrollHeight
       smoothScrollRef.current = false
     })
   }, [messages.length, chat?.id, stickToBottom])
@@ -449,26 +721,47 @@ export default function ChatWindow({
     })
   }, [messages])
 
-  const useVirtual = messages.length > 200
+  // Virtualization can cause visible reflow/flicker on rapid outgoing updates.
+  // Keep it effectively disabled until we rework the virtualization pipeline.
+  const useVirtual = messages.length > 2000
+  const orderedTemplates = useMemo(() => {
+    return [...templates].sort((a, b) => {
+      const left = typeof (a as any).sort_order === 'number' ? (a as any).sort_order : a.id
+      const right = typeof (b as any).sort_order === 'number' ? (b as any).sort_order : b.id
+      return left - right
+    })
+  }, [templates])
+  const replyByTelegramMessageId = useMemo(() => {
+    const map = new Map<number, Message>()
+    for (const message of messages) {
+      if (typeof message.telegram_message_id === 'number') {
+        map.set(message.telegram_message_id, message)
+      }
+    }
+    return map
+  }, [messages])
   const virtual = useMemo(() => {
     const ESTIMATE = 96
     const total = messages.length
     if (!viewportHeight || !useVirtual) {
       return { items: messages, paddingTop: 0, paddingBottom: 0, offset: 0 }
     }
-    const start = Math.max(0, Math.floor(scrollTop / ESTIMATE) - 12)
-    const end = Math.min(total, Math.ceil((scrollTop + viewportHeight) / ESTIMATE) + 12)
+    const estimatedBottomScrollTop = Math.max(0, total * ESTIMATE - viewportHeight)
+    const effectiveScrollTop = stickToBottom && scrollTop === 0 ? estimatedBottomScrollTop : scrollTop
+    const start = Math.max(0, Math.floor(effectiveScrollTop / ESTIMATE) - 12)
+    const end = Math.min(total, Math.ceil((effectiveScrollTop + viewportHeight) / ESTIMATE) + 12)
     return {
       items: messages.slice(start, end),
       paddingTop: start * ESTIMATE,
       paddingBottom: Math.max(0, (total - end) * ESTIMATE),
       offset: start
     }
-  }, [messages, scrollTop, viewportHeight, useVirtual])
+  }, [messages, scrollTop, viewportHeight, useVirtual, stickToBottom])
 
   const handleSend = async () => {
-    if (!chat || (!text.trim() && pendingAttachments.length === 0)) return
-    const textToSend = text.trim() ? text : ''
+    const hasText = text.trim().length > 0
+    if (!chat || deliveryBlocked || (!hasText && pendingAttachments.length === 0)) return
+    const textToSend = text
     const attachmentsToSend = [...pendingAttachments]
     // Don't send buttons if more than 1 attachment (Telegram limitation)
     const buttonsToSend = pendingButtons.length > 0 && attachmentsToSend.length <= 1 ? [...pendingButtons] : undefined
@@ -480,15 +773,15 @@ export default function ChatWindow({
     setPendingButtons([])
     try {
       const firstType = attachmentsToSend[0]?.type || 'text'
-      await api.sendMessage(chat.id, {
-        text: textToSend ? textToSend : undefined,
+      const sent = await api.sendMessage(chat.id, {
+        text: hasText ? textToSend : undefined,
         type: firstType,
         attachments: attachmentsToSend.map((a) => a.upload),
         inline_buttons: buttonsToSend,
         reply_to_message_id: replyToId
       })
       smoothScrollRef.current = true
-      onMessageSent()
+      onMessageSent(sent)
     } catch {
       setText(textToSend)
       setPendingAttachments(attachmentsToSend)
@@ -652,12 +945,28 @@ export default function ChatWindow({
         )}
       </div>
 
+      <div className="mt-3 px-1 h-1 pointer-events-none">
+        <div
+          className={clsx(
+            'chat-open-loader transition-opacity duration-150',
+            chat && !hasShownCurrentChat && (!contentReady || showOpenLoader || isInitialMessagesLoad || holdOpenLoader) ? 'opacity-100' : 'opacity-0'
+          )}
+        />
+      </div>
       <div
         ref={listRef}
-        className="flex-1 min-h-0 overflow-y-auto scrollbar-thin mt-4 pr-2 no-anchor"
+        className={clsx(
+          'flex-1 min-h-0 overflow-y-auto scrollbar-thin mt-4 pr-2 no-anchor transition-opacity duration-100',
+          contentReady && !openingPhase ? 'opacity-100 visible' : 'opacity-0 invisible pointer-events-none'
+        )}
         onScroll={() => {
           const el = listRef.current
           if (!el) return
+          if (openingPhase) {
+            setStickToBottom(true)
+            if (useVirtual) setScrollTop(0)
+            return
+          }
           const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
           setStickToBottom(atBottom)
           if (useVirtual) setScrollTop(el.scrollTop)
@@ -750,7 +1059,7 @@ export default function ChatWindow({
             </div>
           </div>
         )}
-        {chat && messages.length === 0 && !loadingMoreMessages && (
+        {chat && messages.length === 0 && !loadingMoreMessages && !messagesLoading && !openingPhase && (
           <div className="flex flex-col items-center justify-center py-16 gap-4">
             <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-ocean-500/10 to-ocean-600/5 border border-ocean-500/10 flex items-center justify-center">
               <svg className="h-7 w-7 text-ocean-400/50" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -781,7 +1090,7 @@ export default function ChatWindow({
             (() => {
               if (!msg) return null
               const replied = msg.reply_to_telegram_message_id
-                ? messages.find((m) => m.telegram_message_id === msg.reply_to_telegram_message_id)
+                ? replyByTelegramMessageId.get(msg.reply_to_telegram_message_id)
                 : undefined
               const senderLabel =
                 msg.type === 'system'
@@ -789,7 +1098,28 @@ export default function ChatWindow({
                   : msg.direction === 'IN'
                     ? safeText(chat?.first_name || chat?.tg_username || 'Пользователь')
                     : 'Вы'
-              const isNew = !initialLoadRef.current && !seenRef.current.has(msg.id)
+              const hasTextContent = Boolean(safeText(msg.text).trim())
+              const hasAttachments = Boolean(msg.attachments && msg.attachments.length > 0)
+              const isStickerOnly = msg.type === 'sticker' && hasAttachments && !hasTextContent
+              const hasVisualMediaMessage = ['photo', 'video', 'animation', 'sticker', 'video_note'].includes(msg.type)
+              const hasMediaGroupCaption = Boolean(
+                hasTextContent && hasVisualMediaMessage && (msg.attachments?.length || 0) > 1
+              )
+              const msgCreatedAt = msg.created_at ? new Date(msg.created_at).getTime() : NaN
+              const withinTelegramDeleteWindow =
+                Number.isFinite(msgCreatedAt) && Date.now() - msgCreatedAt <= 48 * 60 * 60 * 1000
+              const hasTelegramDeleteId =
+                Boolean(msg.telegram_message_id) ||
+                Boolean((msg.attachments || []).some((att: any) => {
+                  const meta = att?.meta
+                  const value = meta?.telegram_message_id
+                  return typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value))
+                }))
+              const canDeleteMessage = withinTelegramDeleteWindow && hasTelegramDeleteId
+              const isNew =
+                Date.now() > suppressEnterAnimUntilRef.current &&
+                !initialLoadRef.current &&
+                !seenRef.current.has(msg.id)
               return (
             <div
               key={msg.id}
@@ -834,9 +1164,14 @@ export default function ChatWindow({
                   msg.direction === 'OUT'
                     ? 'bg-ocean-600/20 border border-ocean-500/20'
                     : 'bg-white/5 border border-white/10',
-                  msg.attachments && msg.attachments.length > 0
-                    ? 'max-w-[75%] sm:max-w-[65%]'
-                    : 'max-w-[85%] sm:max-w-[75%]'
+                  isStickerOnly
+                    ? 'min-w-[156px] sm:min-w-[172px] max-w-[190px] sm:max-w-[210px]'
+                    : msg.attachments && msg.attachments.length > 0
+                    ? hasVisualMediaMessage
+                      ? 'max-w-[88vw] sm:max-w-[520px]'
+                      : 'max-w-[90%] sm:max-w-[72%]'
+                    : 'max-w-[85%] sm:max-w-[75%]',
+                  isStickerOnly && 'px-3 py-2.5'
                 )}
               >
               <div className="mb-0.5 text-[9px] text-white/50">{senderLabel}</div>
@@ -869,7 +1204,7 @@ export default function ChatWindow({
                   </div>
                 </div>
               )}
-              {msg.text ? (
+              {msg.text && !hasMediaGroupCaption ? (
                 <div className="whitespace-pre-wrap break-words">
                   {highlight && highlight.trim().length > 0
                     ? safeText(msg.text).split(new RegExp(`(${escapeRegExp(highlight)})`, 'ig')).map((part, idx) =>
@@ -889,22 +1224,22 @@ export default function ChatWindow({
                     <span className="ml-2 text-[10px] text-white/40">изменено</span>
                   )}
                 </div>
-              ) : msg.type === 'location' ? (
+              ) : !hasMediaGroupCaption && msg.type === 'location' ? (
                 <div className="flex items-center gap-2 text-white/70">
                   <span className="text-base">📍</span>
                   <span>Геопозиция</span>
                 </div>
-              ) : msg.type === 'contact' ? (
+              ) : !hasMediaGroupCaption && msg.type === 'contact' ? (
                 <div className="flex items-center gap-2 text-white/70">
                   <span className="text-base">👤</span>
                   <span>Контакт</span>
                 </div>
-              ) : msg.type === 'venue' ? (
+              ) : !hasMediaGroupCaption && msg.type === 'venue' ? (
                 <div className="flex items-center gap-2 text-white/70">
                   <span className="text-base">📍</span>
                   <span>Место на карте</span>
                 </div>
-              ) : msg.type === 'poll' ? (
+              ) : !hasMediaGroupCaption && msg.type === 'poll' ? (
                 <div className="flex items-center gap-2 text-white/70">
                   <span className="text-base">📊</span>
                   <span>Опрос</span>
@@ -932,6 +1267,7 @@ export default function ChatWindow({
                   const isVideoNote = msg.type === 'video_note'
                   const isAnimation = msg.type === 'animation' || (mime === 'video/mp4' && name.includes('gif'))
                   const isAnimatedSticker = name.endsWith('.tgs') || mime === 'application/x-tgsticker'
+                  const isVideoSticker = isSticker && (mime === 'video/webm' || name.endsWith('.webm'))
                   const isWebpSticker = isSticker && (mime === 'image/webp' || name.endsWith('.webp'))
                   const isImage =
                     !isSticker && !isAnimation && !isVideoNote && (
@@ -948,24 +1284,58 @@ export default function ChatWindow({
                   const key = `${msg.id}-${index}`
                   const expanded = expandedMedia[key] ?? false
                   return (
-                    <div key={index} className="mt-2 text-xs text-white/60">
-                      {src && (isSticker || isWebpSticker) && !isAnimatedSticker ? (
+                    <div key={index} className={clsx('mt-2 text-xs text-white/60', isStickerOnly && 'flex justify-center')}>
+                      {src && (isSticker || isWebpSticker) && !isAnimatedSticker && !isVideoSticker ? (
                         <div className="flex flex-col gap-2 items-start">
                           {failedStickers.has(key) ? (
-                            <div className="h-24 w-24 flex items-center justify-center rounded-lg bg-white/5 text-white/40 text-[10px]">
-                              Стикер
+                            <div className="h-24 w-24 flex flex-col items-center justify-center rounded-lg bg-white/5 text-white/40 text-[10px] gap-1">
+                              <span>Стикер</span>
+                              {src && (
+                                <a
+                                  href={src}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-[9px] underline text-white/60"
+                                >
+                                  Открыть
+                                </a>
+                              )}
                             </div>
                           ) : (
                             <img
                               src={src}
                               alt="sticker"
                               className="h-24 w-24 object-contain"
+                              data-chat-media="1"
                               loading="lazy"
                               onError={() => setFailedStickers(prev => new Set([...prev, key]))}
                             />
                           )}
                         </div>
+                      ) : src && isVideoSticker ? (
+                        <div className="flex flex-col gap-2 items-start">
+                          <video
+                            src={src}
+                            autoPlay
+                            loop
+                            muted
+                            playsInline
+                            controls
+                            className="h-24 w-24 rounded-lg border border-white/10 object-contain bg-white/5"
+                          />
+                        </div>
                       ) : src && isAnimatedSticker ? (
+                        <div className="flex flex-col gap-2 items-start">
+                          <img
+                            src={src}
+                            alt="animated sticker preview"
+                            className="h-24 w-24 object-contain rounded-lg bg-white/5"
+                            data-chat-media="1"
+                            loading="lazy"
+                            onError={() => setFailedStickers(prev => new Set([...prev, key]))}
+                          />
+                        </div>
+                      ) : isAnimatedSticker ? (
                         <div className="flex flex-col gap-2 items-start">
                           <div className="h-24 w-24 flex items-center justify-center rounded-lg bg-white/5 text-white/40 text-[10px]">
                             Анимированный стикер
@@ -982,6 +1352,7 @@ export default function ChatWindow({
                                   ? 'max-h-[50vh] max-w-[60vw] w-auto h-auto'
                                   : 'max-h-36 max-w-[220px]'
                               }`}
+                              data-chat-media="1"
                               onLoadedMetadata={scrollToBottom}
                             />
                             <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/50 text-[9px] text-white/70">
@@ -1016,6 +1387,7 @@ export default function ChatWindow({
                             muted
                             playsInline
                             className="max-h-36 max-w-[200px] rounded-lg"
+                            data-chat-media="1"
                             onLoadedMetadata={scrollToBottom}
                           />
                         </div>
@@ -1024,40 +1396,12 @@ export default function ChatWindow({
                           <img
                             src={src}
                             alt={att.name || 'image'}
-                            className={`rounded-xl border border-white/10 cursor-pointer ${
-                              expanded
-                                ? 'max-h-[50vh] max-w-[60vw] w-auto h-auto object-contain'
-                                : 'max-h-36 max-w-[220px] object-cover'
-                            }`}
+                            className="rounded-xl cursor-pointer w-full max-w-full max-h-[56vh] object-contain bg-black/10"
                             onClick={() => setLightboxSrc(src)}
+                            data-chat-media="1"
                             loading="lazy"
                             onLoad={scrollToBottom}
                           />
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <button
-                              type="button"
-                              onClick={() => setLightboxSrc(src)}
-                              className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-white/70 hover:bg-white/10"
-                            >
-                              Открыть
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setExpandedMedia((prev) => ({ ...prev, [key]: !expanded }))
-                              }
-                              className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-white/70 hover:bg-white/10"
-                            >
-                              {expanded ? 'Свернуть' : 'Развернуть'}
-                            </button>
-                            <a
-                              href={src}
-                              download={att.name || 'image.jpg'}
-                              className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-white/70 hover:bg-white/10"
-                            >
-                              Скачать
-                            </a>
-                          </div>
                         </div>
                       ) : src && isVideo ? (
                         <div className="flex flex-col gap-2">
@@ -1069,6 +1413,7 @@ export default function ChatWindow({
                                 ? 'max-h-[50vh] max-w-[60vw] w-auto h-auto'
                                 : 'max-h-36 max-w-[220px]'
                             }`}
+                            data-chat-media="1"
                             onLoadedMetadata={scrollToBottom}
                           />
                           <div className="flex items-center gap-2 flex-wrap">
@@ -1109,19 +1454,21 @@ export default function ChatWindow({
                 }
                 const renderGrid = () => {
                   const count = media.length
-                  const cols = count <= 2 ? 'grid-cols-2' : count <= 4 ? 'grid-cols-2' : 'grid-cols-3'
+                  const gridClass = count === 1 ? 'grid-cols-1' : count === 2 ? 'grid-cols-2' : 'grid-cols-3'
                   return (
-                    <div className="mt-2">
-                      <div className={`grid ${cols} gap-2`}>
+                    <div className="mt-2 w-full max-w-full">
+                      <div className={`grid ${gridClass} gap-1 overflow-hidden rounded-xl`}>
                         {media.map((att, index) => {
                           if (!att) return null
                           const src = att.url || att.local_path
                           const mime = (att.mime || '').toLowerCase()
                           const isImage =
                             mime.startsWith('image/') ||
-                            (att.name || '').toLowerCase().match(/\.(png|jpe?g|webp|gif)$/)
+                            (att.name || '').toLowerCase().match(/\.(png|jpe?g|webp|gif|tgs)$/)
                           const isVideo =
                             mime.startsWith('video/') || (att.name || '').toLowerCase().match(/\.(mp4|mov|mkv|webm)$/)
+                          const isStickerTile = msg.type === 'sticker' || mime === 'image/webp'
+                          const tileClass = 'relative overflow-hidden bg-black/10 aspect-square'
                           return (
                             <button
                               key={index}
@@ -1131,41 +1478,27 @@ export default function ChatWindow({
                                 if (isImage) setLightboxSrc(src)
                                 else if (isVideo) window.open(src, '_blank')
                               }}
-                              className="relative overflow-hidden rounded-xl border border-white/10 bg-white/5"
+                              className={tileClass}
                               title="Открыть"
                             >
                               {isImage && src && (
                                 <img
                                   src={src}
                                   alt={att.name || 'image'}
-                                  className="h-24 w-full object-cover"
+                                  className={clsx('h-full w-full', isStickerTile ? 'object-contain bg-white/[0.03]' : 'object-cover')}
+                                  data-chat-media="1"
                                   loading="lazy"
                                 />
                               )}
                               {isVideo && src && (
                                 <>
-                                  <video src={src} className="h-24 w-full object-cover" />
+                                  <video src={src} className="h-full w-full object-cover" data-chat-media="1" />
                                   <span className="absolute inset-0 flex items-center justify-center text-white/80">
                                     ▶
                                   </span>
                                 </>
                               )}
                             </button>
-                          )
-                        })}
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {media.map((att, index) => {
-                          const src = att.url || att.local_path
-                          return (
-                            <a
-                              key={index}
-                              href={src}
-                              download={att.name || `file_${index + 1}`}
-                              className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-white/70 hover:bg-white/10"
-                            >
-                              Скачать {index + 1}
-                            </a>
                           )
                         })}
                       </div>
@@ -1179,6 +1512,27 @@ export default function ChatWindow({
                   </>
                 )
               })()}
+              {msg.text && hasMediaGroupCaption && (
+                <div className="mt-2 whitespace-pre-wrap break-words">
+                  {highlight && highlight.trim().length > 0
+                    ? safeText(msg.text).split(new RegExp(`(${escapeRegExp(highlight)})`, 'ig')).map((part, idx) =>
+                        part.toLowerCase() === highlight.toLowerCase() ? (
+                          <mark
+                            key={idx}
+                            className="bg-gold-500/40 text-white rounded px-1"
+                          >
+                            {part}
+                          </mark>
+                        ) : (
+                          <span key={idx}>{part}</span>
+                        )
+                      )
+                    : safeText(msg.text)}
+                  {msg.is_edited && (
+                    <span className="ml-2 text-[10px] text-white/40">изменено</span>
+                  )}
+                </div>
+              )}
               {/* Inline Buttons */}
               {msg.inline_buttons && msg.inline_buttons.length > 0 && (
                 <div className="mt-3 flex flex-col gap-1.5">
@@ -1203,8 +1557,15 @@ export default function ChatWindow({
                 {formatMsgTime(msg.created_at)}
               </div>
               </div>
-              <div className={clsx('shrink-0 pt-1', !deleteMode && 'opacity-0 group-hover:opacity-100 transition-opacity')}>
-                {deleteMode ? (
+              <div
+                className={clsx(
+                  'shrink-0 pt-1',
+                  deleteMode && canDeleteMessage
+                    ? ''
+                    : 'hidden sm:block opacity-0 group-hover:opacity-100 transition-opacity'
+                )}
+              >
+                {deleteMode && canDeleteMessage ? (
                   <button
                     type="button"
                     onClick={() => setConfirmDelete(msg)}
@@ -1245,6 +1606,11 @@ export default function ChatWindow({
       </div>
 
         <div className="mt-4 border-t border-white/10 pt-4 pb-[env(safe-area-inset-bottom)]">
+        {chat && deliveryBlocked && (
+          <div className="mb-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+            {blockedText}. Отправка из панели отключена.
+          </div>
+        )}
         {replyTo && (
           <div className="mb-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/70 flex items-center justify-between">
             <div className="truncate">
@@ -1284,7 +1650,7 @@ export default function ChatWindow({
                 onClick={() => setAttachOpen((v) => !v)}
                 className="absolute left-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full text-white/60 hover:bg-white/10 active:bg-white/20 cursor-pointer touch-manipulation"
                 title="Прикрепить"
-                disabled={!chat}
+                disabled={!chat || deliveryBlocked}
               >
                 📎
               </button>
@@ -1295,14 +1661,28 @@ export default function ChatWindow({
                 onPaste={handlePaste}
                 onKeyDown={(e) => {
                   if (e.key !== 'Enter') return
-                  if (e.ctrlKey) return
+                  if (e.nativeEvent.isComposing) return
+                  if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault()
+                    const target = e.currentTarget
+                    const start = target.selectionStart ?? text.length
+                    const end = target.selectionEnd ?? text.length
+                    const nextText = `${text.slice(0, start)}\n${text.slice(end)}`
+                    setText(nextText)
+                    requestAnimationFrame(() => {
+                      target.selectionStart = target.selectionEnd = start + 1
+                    })
+                    return
+                  }
+                  if (e.shiftKey) return
                   e.preventDefault()
-                  if (!sending && (text.trim() || pendingAttachments.length > 0)) {
+                  if (!deliveryBlocked && !sending && (text.trim() || pendingAttachments.length > 0)) {
                     void handleSend()
                   }
                 }}
                 rows={2}
-                placeholder="Напишите ответ…"
+                placeholder={deliveryBlocked ? `${blockedText}.` : 'Напишите ответ…'}
+                disabled={deliveryBlocked}
                 className="w-full resize-none bg-transparent text-base sm:text-sm focus:outline-none pl-12 leading-6 py-1.5"
               />
               <div className="absolute right-2 bottom-2 flex items-center gap-2">
@@ -1311,12 +1691,13 @@ export default function ChatWindow({
                   onClick={() => setEmojiOpen((v) => !v)}
                   className="h-9 w-9 rounded-full text-white/60 hover:bg-white/10"
                   title="Эмодзи"
+                  disabled={deliveryBlocked}
                 >
                   🙂
                 </button>
                 <button
                   onClick={handleSend}
-                  disabled={(!text.trim() && pendingAttachments.length === 0) || sending}
+                  disabled={deliveryBlocked || (!text.trim() && pendingAttachments.length === 0) || sending}
                   className={clsx(
                     'h-9 w-9 rounded-full text-sm font-semibold transition flex items-center justify-center',
                     sending || (!text.trim() && pendingAttachments.length === 0)
@@ -1527,9 +1908,9 @@ export default function ChatWindow({
                 </button>
                 <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2">
                   <div className="text-white/50 mb-1">Шаблоны</div>
-                  {templates.length === 0 && <div className="text-white/40">Нет шаблонов</div>}
+                  {orderedTemplates.length === 0 && <div className="text-white/40">Нет шаблонов</div>}
                   <div className="max-h-36 overflow-y-auto scrollbar-thin">
-                    {templates.map((tpl) => (
+                    {orderedTemplates.map((tpl) => (
                       <button
                         key={tpl.id}
                         className="w-full rounded-lg px-2 py-2 text-left hover:bg-white/10 active:bg-white/20 touch-manipulation"
@@ -1606,10 +1987,19 @@ export default function ChatWindow({
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
           onClick={() => setLightboxSrc(null)}
         >
+          <button
+            type="button"
+            onClick={() => setLightboxSrc(null)}
+            className="absolute top-4 right-4 h-9 w-9 rounded-full border border-white/20 bg-black/40 text-white/80"
+            aria-label="Закрыть"
+          >
+            ✕
+          </button>
           <img
             src={lightboxSrc}
             alt="preview"
-            className="max-h-[90vh] max-w-[90vw] rounded-2xl border border-white/10 shadow-soft"
+            className="h-[96vh] w-[96vw] object-contain rounded-xl border border-white/10 shadow-soft"
+            onClick={(e) => e.stopPropagation()}
           />
         </div>
       )}
@@ -1645,8 +2035,8 @@ export default function ChatWindow({
                     await api.deleteMessage(chat.id, confirmDelete.id)
                     setConfirmDelete(null)
                     onMessageDeleted?.()
-                  } catch {
-                    setConfirmDelete(null)
+                  } catch (err: any) {
+                    setDeleteError(err?.message || 'Не удалось удалить сообщение')
                   } finally {
                     setDeletingId(null)
                   }
@@ -1657,6 +2047,11 @@ export default function ChatWindow({
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {deleteError && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 rounded-xl border border-rose-500/35 bg-rose-500/20 px-3 py-2 text-xs text-rose-100">
+          {deleteError}
         </div>
       )}
     </div>

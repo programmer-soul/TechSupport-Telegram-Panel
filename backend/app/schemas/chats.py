@@ -21,6 +21,11 @@ class ChatOut(Timestamped):
     escalated_to_user_id: UUID | None = None
     note: str | None = None
     photo_url: str | None = None
+    bot_blocked: bool = False
+    bot_blocked_reason: str | None = None
+    bot_blocked_at: datetime | None = None
+    admin_blocked: bool = False
+    admin_blocked_at: datetime | None = None
 
 
 class ChatCreateFromBot(BaseModel):
@@ -42,3 +47,7 @@ class ChatNote(BaseModel):
 
 class ChatEscalate(BaseModel):
     superadmin_user_id: str | None = None
+
+
+class ChatBlock(BaseModel):
+    blocked: bool

@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from datetime import datetime, timezone
 import uuid
-from sqlalchemy import and_, desc, exists, or_, select, case, cast, String
-from sqlalchemy.sql.expression import false
+from sqlalchemy import and_, desc, exists, or_, select, case, cast, String, func
 from sqlalchemy.sql import nulls_last
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,8 +11,8 @@ from app.models.auth import User
 from app.models.chat import Chat
 from app.models.message import Message
 from app.models.enums import ChatStatus, MessageDirection, MessageType, UserRole
-from app.schemas.chats import ChatAssign, ChatEscalate, ChatOut, ChatNote
-from app.services.pagination import decode_cursor, encode_cursor
+from app.schemas.chats import ChatAssign, ChatBlock, ChatEscalate, ChatOut, ChatNote
+from app.services.pagination import decode_cursor
 from app.services.serializers import serialize_message
 from app.ws.manager import manager
 from app.services.panel_mode import ensure_test_chat, is_test_mode
@@ -70,36 +69,88 @@ async def list_chats(
     if test_chat:
         filters.append(Chat.id == test_chat.id)
 
-    preview_subq = (
-        select(
-            case(
-                (Message.text.isnot(None), Message.text),
-                else_=cast(Message.type, String),
-            )
-        )
-        .where(Message.chat_id == Chat.id)
-        .order_by(desc(Message.created_at))
-        .limit(1)
-        .scalar_subquery()
-    )
-
-    stmt = select(Chat, preview_subq.label("last_message_preview"))
+    stmt = select(Chat)
     if filters:
         stmt = stmt.where(and_(*filters))
 
     if cursor:
         cursor_dt, cursor_id = decode_cursor(cursor)
-        stmt = stmt.where(or_(Chat.last_message_at < cursor_dt, and_(Chat.last_message_at == cursor_dt, Chat.id < cursor_id)))
+        try:
+            cursor_uuid = uuid.UUID(cursor_id)
+            stmt = stmt.where(
+                or_(
+                    Chat.last_message_at < cursor_dt,
+                    and_(Chat.last_message_at == cursor_dt, Chat.id < cursor_uuid),
+                )
+            )
+        except Exception:
+            stmt = stmt.where(Chat.last_message_at < cursor_dt)
 
-    stmt = stmt.order_by(nulls_last(desc(Chat.last_message_at)), desc(Chat.created_at)).limit(limit)
+    stmt = stmt.order_by(nulls_last(desc(Chat.last_message_at)), desc(Chat.created_at), desc(Chat.id)).limit(limit)
     result = await db.execute(stmt)
-    rows = result.all()
+    chats = list(result.scalars().all())
+    if not chats:
+        return []
+
+    chat_ids = [chat.id for chat in chats]
+    preview_stmt = (
+        select(
+            Message.chat_id,
+            case(
+                (Message.text.isnot(None), Message.text),
+                else_=cast(Message.type, String),
+            ).label("last_message_preview"),
+        )
+        .where(Message.chat_id.in_(chat_ids))
+        .distinct(Message.chat_id)
+        .order_by(Message.chat_id, desc(Message.created_at), desc(Message.id))
+    )
+    preview_rows = await db.execute(preview_stmt)
+    preview_map = {chat_id: preview for chat_id, preview in preview_rows.all()}
+
     output = []
-    for chat, preview in rows:
+    for chat in chats:
         data = ChatOut.model_validate(chat).model_dump()
-        data["last_message_preview"] = preview
+        data["last_message_preview"] = preview_map.get(chat.id)
         output.append(data)
     return output
+
+
+@router.get("/counts", response_model=dict[str, int])
+async def get_chat_counts(
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    if await is_test_mode(db):
+        test_chat = await ensure_test_chat(db)
+        chats = [test_chat]
+        new_count = sum(1 for c in chats if c.status == ChatStatus.new)
+        active_count = sum(1 for c in chats if c.status == ChatStatus.active)
+        closed_count = sum(1 for c in chats if c.status == ChatStatus.closed)
+        transferred_count = sum(1 for c in chats if c.status == ChatStatus.escalated)
+        unanswered_count = sum(1 for c in chats if (c.unread_count or 0) > 0)
+        return {
+            "new": new_count,
+            "active": active_count,
+            "closed": closed_count,
+            "transferred": transferred_count,
+            "unanswered": unanswered_count,
+        }
+
+    status_result = await db.execute(
+        select(Chat.status, func.count(Chat.id)).group_by(Chat.status)
+    )
+    status_map = {status.value: count for status, count in status_result.all()}
+    unanswered_count = await db.scalar(
+        select(func.count(Chat.id)).where(Chat.unread_count > 0)
+    )
+    return {
+        "new": int(status_map.get(ChatStatus.new.value, 0)),
+        "active": int(status_map.get(ChatStatus.active.value, 0)),
+        "closed": int(status_map.get(ChatStatus.closed.value, 0)),
+        "transferred": int(status_map.get(ChatStatus.escalated.value, 0)),
+        "unanswered": int(unanswered_count or 0),
+    }
 
 
 @router.get("/{chat_id}", response_model=ChatOut)
@@ -239,6 +290,60 @@ async def escalate_chat(chat_id: str, payload: ChatEscalate, db: AsyncSession = 
     await manager.broadcast(
         "chat_updated",
         {"id": str(chat.id), "status": chat.status, "escalated_to_user_id": str(chat.escalated_to_user_id) if chat.escalated_to_user_id else None, "last_message_at": chat.last_message_at},
+    )
+    return chat
+
+
+@router.post("/{chat_id}/block", response_model=ChatOut)
+async def block_chat_user(
+    chat_id: str,
+    payload: ChatBlock,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> ChatOut:
+    if await is_test_mode(db):
+        test_chat = await ensure_test_chat(db)
+        if str(test_chat.id) != str(chat_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    result = await db.execute(select(Chat).where(Chat.id == chat_id))
+    chat = result.scalar_one_or_none()
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    now = datetime.now(timezone.utc)
+    chat.admin_blocked = bool(payload.blocked)
+    chat.admin_blocked_at = now if chat.admin_blocked else None
+    if chat.admin_blocked and chat.status != ChatStatus.closed:
+        chat.status = ChatStatus.closed
+        chat.last_message_at = now
+
+    system_text = "Клиент заблокирован администратором" if chat.admin_blocked else "Клиент разблокирован администратором"
+    system_msg = Message(
+        chat_id=chat.id,
+        direction=MessageDirection.outbound,
+        type=MessageType.system,
+        text=system_text,
+        sent_by_user_id=admin.id,
+    )
+    db.add(system_msg)
+    await db.flush()
+    await db.commit()
+    await db.refresh(chat)
+
+    await manager.broadcast(
+        "message_created",
+        {"chat_id": str(chat.id), "message": serialize_message(system_msg, [])},
+    )
+    await manager.broadcast(
+        "chat_updated",
+        {
+            "id": str(chat.id),
+            "status": chat.status.value if hasattr(chat.status, "value") else str(chat.status),
+            "last_message_at": chat.last_message_at,
+            "last_message_preview": system_text,
+            "admin_blocked": chat.admin_blocked,
+            "admin_blocked_at": chat.admin_blocked_at,
+        },
     )
     return chat
 

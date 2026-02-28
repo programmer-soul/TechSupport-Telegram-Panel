@@ -139,6 +139,12 @@ docker compose exec backend alembic upgrade head
 docker compose exec backend python -m app.scripts.create_admin
 ```
 
+Нагрузочные тесты (k6):
+```bash
+# Документация и готовые сценарии
+cat loadtest/README.md
+```
+
 ## Частые проблемы
 
 ### Не выдался SSL сертификат

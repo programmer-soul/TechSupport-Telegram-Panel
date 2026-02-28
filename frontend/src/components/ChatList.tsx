@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef } from 'react'
 import clsx from 'clsx'
 import { Chat } from '../lib/api'
 
@@ -40,15 +40,7 @@ const formatListTime = (iso?: string | null) => {
     : date.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-export default function ChatList({
-  chats,
-  selectedId,
-  onSelect,
-  panelMode,
-  hasMore = false,
-  loadingMore = false,
-  onLoadMore
-}: {
+type ChatListProps = {
   chats: Chat[]
   selectedId?: string
   onSelect: (chat: Chat) => void
@@ -56,8 +48,78 @@ export default function ChatList({
   hasMore?: boolean
   loadingMore?: boolean
   onLoadMore?: () => void
+}
+
+const ChatListItem = memo(function ChatListItem({
+  chat,
+  selectedId,
+  onSelect,
+  panelMode
+}: {
+  chat: Chat
+  selectedId?: string
+  onSelect: (chat: Chat) => void
+  panelMode?: 'prod' | 'test'
 }) {
+  const isTestChat = chat.tg_id === 999000111
+  const showTestBadge = panelMode === 'test' && isTestChat
+  return (
+    <button
+      onClick={() => onSelect(chat)}
+      className={clsx(
+        'relative text-left p-4 rounded-xl transition-colors border',
+        selectedId === chat.id
+          ? 'bg-white/[0.04] border-white/[0.06]'
+          : 'bg-white/[0.03] hover:bg-white/[0.05] border-white/[0.04]'
+      )}
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '96px' }}
+    >
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-display font-semibold flex items-center gap-2">
+          <span>
+            {truncate(safeText(chat.first_name || 'Пользователь'), 22)}
+            <span className="text-white/50 ml-2">{truncate(`@${safeText(chat.tg_username || 'unknown')}`, 18)}</span>
+          </span>
+          {showTestBadge && (
+            <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-amber-200">
+              Тест
+            </span>
+          )}
+        </div>
+        {chat.unread_count > 0 && (
+          <span className="text-xs bg-ocean-600 text-white px-2 py-0.5 rounded-full">
+            {chat.unread_count}
+          </span>
+        )}
+      </div>
+      <div className="mt-2 text-xs text-white/50 truncate">
+        {truncate(safeText(chat.last_message_preview || ''), 46) || '—'}
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2 flex-wrap text-xs text-white/50">
+        <span className={clsx('px-2 py-0.5 rounded-full border whitespace-nowrap', statusBadge[chat.status])}>
+          {statusLabel[chat.status] || chat.status}
+        </span>
+        <span>{formatListTime(chat.last_message_at)}</span>
+      </div>
+    </button>
+  )
+}, (prev, next) =>
+  prev.chat === next.chat &&
+  prev.selectedId === next.selectedId &&
+  prev.panelMode === next.panelMode
+)
+
+function ChatList({
+  chats,
+  selectedId,
+  onSelect,
+  panelMode,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore
+}: ChatListProps) {
   const loaderRef = useRef<HTMLDivElement>(null)
+  const rows = useMemo(() => chats, [chats])
 
   // Infinite scroll with IntersectionObserver
   useEffect(() => {
@@ -82,51 +144,14 @@ export default function ChatList({
 
   return (
     <div className="flex flex-col gap-3">
-      {chats.map((chat) => (
-        (() => {
-          const isTestChat = chat.tg_id === 999000111
-          const showTestBadge = panelMode === 'test' && isTestChat
-          return (
-        <button
+      {rows.map((chat) => (
+        <ChatListItem
           key={chat.id}
-          onClick={() => onSelect(chat)}
-          className={clsx(
-            'relative text-left p-4 rounded-xl transition-colors border',
-            selectedId === chat.id
-              ? 'bg-white/[0.04] border-white/[0.06]'
-              : 'bg-white/[0.03] hover:bg-white/[0.05] border-white/[0.04]'
-          )}
-        >
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-display font-semibold flex items-center gap-2">
-              <span>
-                {truncate(safeText(chat.first_name || 'Пользователь'), 22)}
-                <span className="text-white/50 ml-2">{truncate(`@${safeText(chat.tg_username || 'unknown')}`, 18)}</span>
-              </span>
-              {showTestBadge && (
-                <span className="rounded-full border border-amber-400/40 bg-amber-400/15 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-amber-200">
-                  Тест
-                </span>
-              )}
-            </div>
-            {chat.unread_count > 0 && (
-              <span className="text-xs bg-ocean-600 text-white px-2 py-0.5 rounded-full">
-                {chat.unread_count}
-              </span>
-            )}
-          </div>
-          <div className="mt-2 text-xs text-white/50 truncate">
-            {truncate(safeText(chat.last_message_preview || ''), 46) || '—'}
-          </div>
-          <div className="mt-3 flex items-center justify-between gap-2 flex-wrap text-xs text-white/50">
-            <span className={clsx('px-2 py-0.5 rounded-full border whitespace-nowrap', statusBadge[chat.status])}>
-              {statusLabel[chat.status] || chat.status}
-            </span>
-            <span>{formatListTime(chat.last_message_at)}</span>
-          </div>
-        </button>
-          )
-        })()
+          chat={chat}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          panelMode={panelMode}
+        />
       ))}
 
       {/* Loading more indicator */}
@@ -148,3 +173,5 @@ export default function ChatList({
     </div>
   )
 }
+
+export default memo(ChatList)
