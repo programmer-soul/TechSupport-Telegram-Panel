@@ -10,13 +10,13 @@ DB_WAIT_SECONDS=90
 
 usage() {
   cat <<'EOF'
-Usage: ./install.sh [options]
+Использование: ./install.sh [параметры]
 
-Options:
-  --no-build         Skip image build (docker compose up -d)
-  --pull             Pull latest images before startup
-  --db-wait N        Wait up to N seconds for PostgreSQL readiness (default: 90)
-  -h, --help         Show this help
+Параметры:
+  --no-build         Запуск без сборки образов (docker compose up -d)
+  --pull             Подтянуть последние образы перед запуском
+  --db-wait N        Ждать готовности PostgreSQL до N секунд (по умолчанию: 90)
+  -h, --help         Показать эту справку
 EOF
 }
 
@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
       exit 0
       ;;
     *)
-      echo "[techweb] Unknown option: $1" >&2
+      echo "[techweb] Неизвестный параметр: $1" >&2
       usage
       exit 1
       ;;
@@ -59,17 +59,17 @@ need_cmd() {
 }
 
 ensure_docker() {
-  log "Checking Docker..."
+  log "Проверка Docker..."
   if command -v docker >/dev/null 2>&1; then
     return 0
   fi
 
-  warn "Docker is not installed. Trying auto-install..."
+  warn "Docker не найден. Пытаюсь установить автоматически..."
   if ! command -v apt-get >/dev/null 2>&1; then
-    die "Auto-install is supported only on Debian/Ubuntu (apt). Install Docker manually."
+    die "Автоустановка поддерживается только на Debian/Ubuntu (apt). Установите Docker вручную."
   fi
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-    die "Docker auto-install requires root. Re-run with sudo."
+    die "Для автоустановки Docker нужны права root. Запустите через sudo."
   fi
 
   apt-get update -y
@@ -87,34 +87,34 @@ ensure_docker() {
 }
 
 prepare_jwt_keys() {
-  log "Preparing JWT keys..."
+  log "Подготовка JWT-ключей..."
   need_cmd openssl
   mkdir -p backend/keys
 
   if [ ! -f backend/keys/jwt_private.pem ]; then
     openssl genrsa -out backend/keys/jwt_private.pem 2048 >/dev/null 2>&1
     chmod 600 backend/keys/jwt_private.pem
-    log "Created backend/keys/jwt_private.pem"
+    log "Создан backend/keys/jwt_private.pem"
   fi
   if [ ! -f backend/keys/jwt_public.pem ]; then
     openssl rsa -in backend/keys/jwt_private.pem -pubout -out backend/keys/jwt_public.pem >/dev/null 2>&1
     chmod 644 backend/keys/jwt_public.pem
-    log "Created backend/keys/jwt_public.pem"
+    log "Создан backend/keys/jwt_public.pem"
   fi
 }
 
 ensure_env_file() {
-  log "Checking .env..."
+  log "Проверка .env..."
   if [ ! -f .env ]; then
     cp .env.example .env
-    warn ".env was created from .env.example"
-    warn "Fill .env values, then run ./install.sh again"
+    warn "Файл .env создан из .env.example"
+    warn "Заполните .env и запустите ./install.sh снова"
     exit 0
   fi
 }
 
 validate_env() {
-  log "Loading .env..."
+  log "Загрузка .env..."
   set -a
   # shellcheck disable=SC1091
   . ./.env
@@ -140,15 +140,15 @@ validate_env() {
   done
 
   if [ "${#missing[@]}" -gt 0 ]; then
-    printf '[techweb][error] Missing .env values: %s\n' "${missing[*]}" >&2
+    printf '[techweb][error] В .env не заполнены переменные: %s\n' "${missing[*]}" >&2
     exit 1
   fi
 
   if printf '%s\n' "${SECRET_KEY:-}" "${BOT_INTERNAL_TOKEN:-}" | grep -qi 'change-me'; then
-    warn "You still have placeholder secrets (change-me*) in .env"
+    warn "В .env остались плейсхолдеры секретов (change-me*)"
   fi
   if printf '%s\n' "${DOMAIN:-}" "${PANEL_ORIGIN:-}" | grep -qi 'example.com'; then
-    warn "DOMAIN/PANEL_ORIGIN look like example values. SSL/login may fail."
+    warn "DOMAIN/PANEL_ORIGIN похожи на примерные значения. SSL/авторизация могут не работать."
   fi
 }
 
@@ -158,10 +158,10 @@ wait_for_db() {
   local started_at now elapsed
   started_at="$(date +%s)"
 
-  log "Starting PostgreSQL container..."
+  log "Запуск контейнера PostgreSQL..."
   docker compose up -d db
 
-  log "Waiting for DB readiness (timeout: ${DB_WAIT_SECONDS}s)..."
+  log "Ожидание готовности БД (таймаут: ${DB_WAIT_SECONDS}с)..."
   while true; do
     if docker compose exec -T db pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1; then
       log "PostgreSQL is ready"
@@ -171,7 +171,7 @@ wait_for_db() {
     elapsed="$((now - started_at))"
     if [ "$elapsed" -ge "$DB_WAIT_SECONDS" ]; then
       docker compose logs --tail=80 db || true
-      die "DB did not become ready in ${DB_WAIT_SECONDS}s"
+      die "БД не стала готова за ${DB_WAIT_SECONDS}с"
     fi
     sleep 1
   done
@@ -179,15 +179,15 @@ wait_for_db() {
 
 start_stack() {
   if [ "$PULL" -eq 1 ]; then
-    log "Pulling latest images..."
+    log "Подтягиваю последние образы..."
     docker compose pull
   fi
 
   if [ "$NO_BUILD" -eq 1 ]; then
-    log "Starting stack without build..."
+    log "Запуск стека без сборки..."
     docker compose up -d
   else
-    log "Starting stack with build..."
+    log "Запуск стека со сборкой..."
     docker compose up -d --build
   fi
 }
@@ -195,18 +195,18 @@ start_stack() {
 post_summary() {
   local domain="${DOMAIN:-localhost}"
   local panel_origin="${PANEL_ORIGIN:-https://${domain}}"
-  log "Done"
-  log "Panel URL: ${panel_origin}"
-  log "Status: docker compose ps"
-  log "Logs: docker compose logs -f"
-  log "Backend logs: docker compose logs -f backend"
+  log "Готово"
+  log "URL панели: ${panel_origin}"
+  log "Статус: docker compose ps"
+  log "Логи: docker compose logs -f"
+  log "Логи backend: docker compose logs -f backend"
 }
 
 need_cmd grep
 need_cmd sed
 need_cmd awk
 ensure_docker
-docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is not available"
+docker compose version >/dev/null 2>&1 || die "Docker Compose v2 недоступен"
 prepare_jwt_keys
 ensure_env_file
 validate_env
