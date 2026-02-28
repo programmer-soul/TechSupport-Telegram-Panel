@@ -55,7 +55,7 @@ die() {
 }
 
 need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+  command -v "$1" >/dev/null 2>&1 || die "Не найдена обязательная команда: $1"
 }
 
 ensure_docker() {
@@ -80,7 +80,13 @@ ensure_docker() {
     chmod a+r /etc/apt/keyrings/docker.gpg
   fi
   if [ ! -f /etc/apt/sources.list.d/docker.list ]; then
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+    # Поддерживаем Ubuntu и Debian корректно (не хардкодим ubuntu URL для всех).
+    . /etc/os-release
+    case "${ID:-}" in
+      ubuntu|debian) ;;
+      *) die "Автоустановка Docker поддерживается только для Ubuntu/Debian (ID=${ID:-unknown})" ;;
+    esac
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
   fi
   apt-get update -y
   apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
@@ -164,7 +170,7 @@ wait_for_db() {
   log "Ожидание готовности БД (таймаут: ${DB_WAIT_SECONDS}с)..."
   while true; do
     if docker compose exec -T db pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1; then
-      log "PostgreSQL is ready"
+      log "PostgreSQL готов"
       return 0
     fi
     now="$(date +%s)"
@@ -192,6 +198,17 @@ start_stack() {
   fi
 }
 
+validate_cli_args() {
+  case "${DB_WAIT_SECONDS}" in
+    ''|*[!0-9]*)
+      die "Параметр --db-wait должен быть целым числом в секундах"
+      ;;
+  esac
+  if [ "${DB_WAIT_SECONDS}" -lt 1 ]; then
+    die "Параметр --db-wait должен быть больше 0"
+  fi
+}
+
 post_summary() {
   local domain="${DOMAIN:-localhost}"
   local panel_origin="${PANEL_ORIGIN:-https://${domain}}"
@@ -202,11 +219,9 @@ post_summary() {
   log "Логи backend: docker compose logs -f backend"
 }
 
-need_cmd grep
-need_cmd sed
-need_cmd awk
 ensure_docker
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 недоступен"
+validate_cli_args
 prepare_jwt_keys
 ensure_env_file
 validate_env
